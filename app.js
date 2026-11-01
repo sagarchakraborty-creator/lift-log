@@ -1,13 +1,31 @@
 'use strict';
 // Lift Log: gym workouts logged set by set against a weekly plan, body weight and measurements, and
 // YouTube trainer videos stamped at the second each exercise is shown, so form clips open at the right spot.
-const KEY = 'liftlog.v1';
+// Two people use the app on one phone, each with their own data under liftlog.v1.<id>.
+// mode 'gym' logs kg × reps; 'bodyweight' starts every exercise as reps-only or timed.
+const PEOPLE = [
+  { id: 'sagar', name: 'Sagar', mode: 'gym', aim: 'Build muscle' },
+  { id: 'madhumita', name: 'Madhumita', mode: 'bodyweight', aim: 'Get fit and toned' },
+];
+const AIMS = ['Build muscle', 'Lose fat', 'Get fit and toned', 'Get stronger', 'Stay active'];
+const PERSON_KEY = 'liftlog.person';
+const keyFor = id => `liftlog.v1.${id}`;
+// Before profiles existed everything lived under liftlog.v1; that data is Sagar's.
+try {
+  const old = localStorage.getItem('liftlog.v1');
+  if (old && !localStorage.getItem(keyFor('sagar'))) localStorage.setItem(keyFor('sagar'), old);
+  if (old) localStorage.removeItem('liftlog.v1');
+} catch (e) { /* storage blocked */ }
+let person = 'sagar';
+try { if (PEOPLE.some(p => p.id === localStorage.getItem(PERSON_KEY))) person = localStorage.getItem(PERSON_KEY); } catch (e) { /* storage blocked */ }
+let KEY = keyFor(person);
+const me = () => PEOPLE.find(p => p.id === person);
 const DAY = 864e5;
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 // Body parts: each exercise has one main target, used for the weekly coverage card.
-const GROUPS = ['Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Forearms', 'Core', 'Quads', 'Hamstrings', 'Glutes', 'Calves', 'Cardio', 'Other'];
+const GROUPS = ['Chest', 'Back', 'Shoulders', 'Biceps', 'Triceps', 'Forearms', 'Core', 'Quads', 'Hamstrings', 'Glutes', 'Calves', 'Full body', 'Cardio', 'Other'];
 const LEVELS = { beg: 'Beginner', int: 'Intermediate', adv: 'Advanced' };
 const STARTER_EX = [
   ['Bench press', 'Chest'], ['Incline dumbbell press', 'Chest'], ['Chest fly', 'Chest'], ['Dips', 'Chest'],
@@ -44,6 +62,27 @@ function applyBroSplit(st) {
   st.split = 'bro2';
   return st;
 }
+// Madhumita: home, bodyweight only. [name, body part, kind] where kind 'reps' = reps only, 'time' = seconds held.
+const BODYWEIGHT_EX = [
+  ['Push-up', 'Chest', 'reps'], ['Knee push-up', 'Chest', 'reps'], ['Incline push-up', 'Chest', 'reps'], ['Chair dip', 'Triceps', 'reps'],
+  ['Pike push-up', 'Shoulders', 'reps'], ['Superman', 'Back', 'reps'], ['Reverse snow angel', 'Back', 'reps'],
+  ['Bodyweight squat', 'Quads', 'reps'], ['Lunge', 'Quads', 'reps'], ['Step-up', 'Quads', 'reps'], ['Wall sit', 'Quads', 'time'],
+  ['Glute bridge', 'Glutes', 'reps'], ['Donkey kick', 'Glutes', 'reps'], ['Fire hydrant', 'Glutes', 'reps'], ['Calf raise', 'Calves', 'reps'],
+  ['Plank', 'Core', 'time'], ['Side plank', 'Core', 'time'], ['Crunch', 'Core', 'reps'], ['Bicycle crunch', 'Core', 'reps'], ['Leg raise', 'Core', 'reps'],
+  ['Jumping jacks', 'Cardio', 'time'], ['High knees', 'Cardio', 'time'], ['Mountain climber', 'Cardio', 'time'],
+  ['Burpee', 'Full body', 'reps'], ['Inchworm', 'Full body', 'reps'],
+];
+// Her starter week; she can edit it or refill days from her own trainer videos.
+const HOME_PLAN = {
+  source: 'Home · bodyweight', target: '3 rounds · 12–15 reps or 30–45 s',
+  days: [
+    [1, 'Full body', ['Bodyweight squat', 'Push-up', 'Glute bridge', 'Plank', 'Jumping jacks']],
+    [2, 'Cardio & core', ['Jumping jacks', 'High knees', 'Mountain climber', 'Bicycle crunch', 'Plank']],
+    [4, 'Lower body', ['Bodyweight squat', 'Lunge', 'Glute bridge', 'Donkey kick', 'Wall sit', 'Calf raise']],
+    [5, 'Upper body & core', ['Knee push-up', 'Chair dip', 'Superman', 'Plank', 'Crunch']],
+    [6, 'Full body HIIT', ['Burpee', 'Mountain climber', 'Bodyweight squat', 'High knees', 'Inchworm']],
+  ],
+};
 const MEAS = [['waist', 'Waist'], ['chest', 'Chest'], ['arm', 'Arm'], ['hip', 'Hips'], ['thigh', 'Thigh']];
 const SKIP_CHAPTER = /\b(intro|introduction|outro|subscribe|sponsor|conclusion|ending|final thoughts|recap|summary|thanks)\b/i;
 
@@ -75,13 +114,26 @@ let installEvt = null, pendingReload = false;
 
 /* ---------- storage ---------- */
 function defaults() {
-  const ex = STARTER_EX.map(([name, group]) => ({ id: uid(), name, group }));
-  return applyBroSplit({
-    ex, plans: [], sessions: [], active: null, body: [], videos: [],
+  const p = me();
+  const base = {
+    ex: [], plans: [], sessions: [], active: null, body: [], videos: [],
     // week[getDay()] = plan id, or null for a rest day
     week: [null, null, null, null, null, null, null],
-    settings: { goal: null, rest: 90, wake: true, theme: 'auto', level: 'beg', play: 'inapp', playV: 2 },
+    settings: { goal: null, aim: p.aim, rest: p.mode === 'gym' ? 90 : 45, wake: true, theme: 'auto', level: 'beg', play: 'inapp', playV: 2 },
+  };
+  if (p.mode === 'gym') {
+    base.ex = STARTER_EX.map(([name, group]) => ({ id: uid(), name, group, kind: group === 'Core' && /plank/i.test(name) ? 'time' : 'weight' }));
+    return applyBroSplit(base);
+  }
+  base.ex = BODYWEIGHT_EX.map(([name, group, kind]) => ({ id: uid(), name, group, kind }));
+  const idOf = n => base.ex.find(e => e.name === n).id;
+  base.plans = HOME_PLAN.days.map(([dow, name, list]) => {
+    const pl = { id: uid(), name, ex: list.map(idOf), target: HOME_PLAN.target, source: HOME_PLAN.source };
+    base.week[dow] = pl.id;
+    return pl;
   });
+  base.split = 'home1';
+  return base;
 }
 function load() {
   try {
@@ -90,12 +142,27 @@ function load() {
       const d = defaults(), st = { ...d, ...s, settings: { ...d.settings, ...s.settings } };
       // Play mode v2: videos play inside the app with your YouTube sign-in (earlier versions defaulted to the YouTube app).
       if (s.settings?.playV !== 2) Object.assign(st.settings, { play: 'inapp', playV: 2 });
-      // One-time reset of the week to the empty bro-split days he asked for (2026-11-01).
-      if (s.split !== 'bro2') { applyBroSplit(st); try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* saved on next change */ } }
+      // One-time reset of Sagar's week to the empty bro-split days he asked for (2026-11-01).
+      if (person === 'sagar' && s.split !== 'bro2') { applyBroSplit(st); try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* saved on next change */ } }
       return st;
     }
   } catch (e) { /* nothing saved yet */ }
   return defaults();
+}
+// Switch person: save the current one, load the other's data and colours.
+function switchPerson(id) {
+  if (id === person) { closeSheet(); return; }
+  save();
+  stopRest(); unwake();
+  person = id;
+  KEY = keyFor(id);
+  try { localStorage.setItem(PERSON_KEY, id); } catch (e) { /* storage blocked */ }
+  S = load();
+  progEx = null; bodyDate = null; vFilter = 'All'; vQuery = '';
+  applyTheme(); closeSheet(); shownView = null; go('train');
+  if (S.active) wake();
+  buzz([20, 30, 20]);
+  toast(`Hi ${me().name} 👋`);
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save on this phone'); }
@@ -122,12 +189,15 @@ const GUESS = [
   [/run|bike|cycle|row(ing)? machine|jump|burpee|skipping|cardio|hiit/, 'Cardio'],
 ];
 const guessGroup = name => (GUESS.find(([re]) => re.test(String(name).toLowerCase())) || [, 'Other'])[1];
+// Holds and timed moves log seconds; for a bodyweight person everything else logs reps only.
+const guessKind = name => (/plank|hold|wall sit|hang|stretch|pose|jumping jack|high knee|mountain climber|skipping|jog|run/i.test(name) ? 'time'
+  : me().mode === 'bodyweight' ? 'reps' : 'weight');
 function resolveEx(name) {
   name = String(name || '').trim().replace(/\s+/g, ' ');
   if (!name) return null;
   const hit = findEx(name);
   if (hit) return hit.id;
-  const e = { id: uid(), name: name[0].toUpperCase() + name.slice(1), group: guessGroup(name) };
+  const e = { id: uid(), name: name[0].toUpperCase() + name.slice(1), group: guessGroup(name), kind: guessKind(name) };
   S.ex.push(e);
   return e.id;
 }
@@ -141,16 +211,31 @@ function lastTime(exId, skipId) {
   }
   return null;
 }
-function bestE1(exId, skipId) {
+// How an exercise is logged: 'weight' = kg × reps, 'reps' = reps only (bodyweight), 'time' = seconds held.
+const kindOf = exId => exById(exId)?.kind || 'weight';
+const KINDS = { weight: 'kg × reps', reps: 'Reps only', time: 'Time (seconds)' };
+const fmtSet = (kind, s) => (kind === 'time' ? `${s.r} s` : kind === 'reps' ? `${s.r} reps` : `${fmtKg(s.w || 0)} kg × ${s.r}`);
+// What a "best" means: estimated 1-rep max for weights, most reps, or longest hold.
+const score = (kind, s) => (kind === 'weight' ? e1rm(s.w, s.r) || (s.w ? 0 : s.r / 100) : s.r || 0);
+function bestScore(exId, skipId) {
+  const k = kindOf(exId);
   let b = 0;
-  S.sessions.forEach(s => { if (s.id !== skipId) s.items.forEach(it => { if (it.ex === exId) doneSets(it).forEach(x => { b = Math.max(b, e1rm(x.w, x.r)); }); }); });
+  S.sessions.forEach(s => { if (s.id !== skipId) s.items.forEach(it => { if (it.ex === exId) doneSets(it).forEach(x => { b = Math.max(b, score(k, x)); }); }); });
   return b;
 }
 function sessionTotals(s) {
-  let sets = 0, vol = 0, prs = 0;
-  s.items.forEach(it => doneSets(it).forEach(x => { sets++; vol += (x.w || 0) * (x.r || 0); if (x.pr) prs++; }));
-  return { sets, vol, prs };
+  let sets = 0, vol = 0, prs = 0, reps = 0, secs = 0;
+  s.items.forEach(it => {
+    const k = kindOf(it.ex);
+    doneSets(it).forEach(x => {
+      sets++; if (x.pr) prs++;
+      if (k === 'time') secs += x.r || 0; else if (k === 'reps' || !x.w) reps += x.r || 0; else vol += x.w * (x.r || 0);
+    });
+  });
+  return { sets, vol, prs, reps, secs };
 }
+// "1.2 t lifted", or for bodyweight work "120 reps · 3:30 held".
+const workTxt = t => [t.vol ? `${fmtVol(t.vol)} lifted` : '', t.reps ? `${t.reps} reps` : '', t.secs ? `${clock(t.secs)} held` : ''].filter(Boolean).join(' · ') || '';
 const weekStart = (off = 0) => { const d = startOfDay(); return +d - ((d.getDay() + 6) % 7) * DAY - off * 7 * DAY; };
 const sessionsOn = iso => S.sessions.filter(s => isoDay(s.start) === iso);
 const lastDone = planId => { for (let i = S.sessions.length - 1; i >= 0; i--) if (S.sessions[i].planId === planId) return S.sessions[i].start; return 0; };
@@ -276,7 +361,7 @@ const targets = exIds => [...new Set(exIds.map(id => exById(id)?.group).filter(g
 const targetsOf = p => [...new Set([...targets(p.ex), ...(p.ex.length ? [] : p.parts || [])])];
 const BP_COLORS = {
   Chest: '#ef4444', Back: '#3b82f6', Shoulders: '#f59e0b', Biceps: '#8b5cf6', Triceps: '#ec4899', Forearms: '#a16207',
-  Core: '#14b8a6', Quads: '#22c55e', Hamstrings: '#65a30d', Glutes: '#f97316', Calves: '#06b6d4', Cardio: '#e11d48', Other: '#64748b',
+  Core: '#14b8a6', Quads: '#22c55e', Hamstrings: '#65a30d', Glutes: '#f97316', Calves: '#06b6d4', 'Full body': '#0ea5e9', Cardio: '#e11d48', Other: '#64748b',
 };
 const bpChip = g => `<span class="bpchip" style="--c:${BP_COLORS[g] || BP_COLORS.Other}">${esc(g)}</span>`;
 const buzz = (ms = 12) => { try { navigator.vibrate?.(ms); } catch (e) { /* no vibration */ } };
@@ -377,8 +462,7 @@ function go(v) {
 }
 function subtitle() {
   if (view === 'train') {
-    const n = S.sessions.filter(s => s.start >= weekStart()).length;
-    return `${fmtDate(Date.now(), { weekday: 'long', day: 'numeric', month: 'short' })} · ${n} workout${n === 1 ? '' : 's'} this week`;
+    return `${me().name} · ${S.settings.aim || me().aim}`;
   }
   if (view === 'videos') { const n = S.videos.reduce((a, v) => a + v.stamps.length, 0); return `${S.videos.length} videos · ${n} exercise stamps`; }
   if (view === 'history') return `${S.sessions.length} workouts logged`;
@@ -397,7 +481,7 @@ function viewTrain() {
   if (doneToday.length) {
     const t = sessionTotals(doneToday[doneToday.length - 1]);
     hero = `<section class="card hero done">${top('✓ Done today')}<h2 class="big">${esc(doneToday[doneToday.length - 1].name)}</h2>
-      <p>${t.sets} sets · ${fmtVol(t.vol)} lifted${t.prs ? ` · ★ ${t.prs} new best${t.prs === 1 ? '' : 's'}` : ''}</p>
+      <p>${[`${t.sets} sets`, workTxt(t), t.prs ? `★ ${t.prs} new best${t.prs === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")}</p>
       <button class="btn ghost" data-act="openSession" data-id="${doneToday[doneToday.length - 1].id}">See workout</button></section>`;
   } else if (plan) {
     const v = plan.vid && vById(plan.vid);
@@ -432,10 +516,11 @@ function coverage() {
   const ws = weekStart(), done = {}, planned = {};
   S.sessions.forEach(s => { if (s.start >= ws) s.items.forEach(it => { const g = exById(it.ex)?.group; if (g) done[g] = (done[g] || 0) + doneSets(it).length; }); });
   WEEK_ORDER.forEach(d => { const p = planById(S.week[d]); if (p) targetsOf(p).forEach(g => { (planned[g] = planned[g] || []).push(DOW[d]); }); });
-  const main = GROUPS.filter(g => !['Forearms', 'Cardio', 'Other'].includes(g));
+  // Only the main muscle groups are flagged when missing; full body and cardio show when you plan or do them.
+  const main = GROUPS.filter(g => !['Forearms', 'Full body', 'Cardio', 'Other'].includes(g));
   const missing = main.filter(g => !planned[g] && !done[g]);
   // Bars fill toward 10 hard sets per body part per week, a common target for growth.
-  const rows = main.filter(g => planned[g] || done[g]).map(g => {
+  const rows = GROUPS.filter(g => g !== 'Other' && (planned[g] || done[g])).map(g => {
     const n = done[g] || 0;
     return `<div class="bpbar" style="--c:${BP_COLORS[g]}"><span class="nm">${g}</span>
       <div class="track"><i class="fill" data-w="${Math.min(100, n * 10)}"></i></div><span class="v"><b>${n}</b> / 10 sets</span>
@@ -481,17 +566,19 @@ function placeholder(it, j, last) {
 function exCard(it, i) {
   const lt = lastTime(it.ex, S.active.id), last = lt?.sets || [];
   const clips = clipsFor(it);
-  const g = exById(it.ex)?.group;
+  const g = exById(it.ex)?.group, k = kindOf(it.ex);
+  const rLabel = k === 'time' ? 'Seconds' : 'Reps';
+  const first = k === 'weight' ? 'First time: pick a weight you can do with good form' : k === 'time' ? 'First time: hold as long as you can with good form' : 'First time: do as many clean reps as you can';
   return `<section class="card ex" id="ex-${i}" style="--c:${BP_COLORS[g] || 'var(--navy)'}"><div class="head"><div><h3>${esc(exName(it.ex))}</h3>${g ? bpChip(g) : ''}</div>
       ${clips.length ? `<button class="btn ghost small" data-act="form" data-i="${i}">▶ Form${it.stamp ? ` ${clock(it.stamp.t)}` : ''}</button>` : ''}</div>
     ${S.active.target ? `<p class="goalline">🎯 ${esc(S.active.target)}</p>` : ''}
-    <p class="last">${lt ? `<b>Last time (${fmtDate(lt.date, { day: 'numeric', month: 'short' })}):</b> ` + last.map(s => `${fmtKg(s.w || 0)} kg × ${s.r}`).join(', ') : 'First time: pick a weight you can do with good form'}</p>
-    <div class="sets"><div class="set hdr"><span class="n">Set</span><span>kg</span><span>Reps</span><span></span></div>
+    <p class="last">${lt ? `<b>Last time (${fmtDate(lt.date, { day: 'numeric', month: 'short' })}):</b> ` + last.map(s => fmtSet(k, s)).join(', ') : first}</p>
+    <div class="sets ${k === 'weight' ? '' : 'one'}"><div class="set hdr"><span class="n">Set</span>${k === 'weight' ? '<span>kg</span>' : ''}<span>${rLabel}</span><span></span></div>
     ${it.sets.map((s, j) => {
       const ph = placeholder(it, j, last);
       return `<div class="set ${s.done ? 'done' : ''} ${justTicked === `${i}-${j}` ? 'just' : ''}"><span class="n ${s.pr ? 'pr' : ''}">${s.pr ? '★' : j + 1}</span>
-        <input inputmode="decimal" enterkeyhint="next" data-in="w" data-i="${i}" data-j="${j}" value="${s.w === '' || s.w == null ? '' : s.w}" placeholder="${ph.w ?? ''}" aria-label="Weight in kg, set ${j + 1}">
-        <input inputmode="numeric" enterkeyhint="done" data-in="r" data-i="${i}" data-j="${j}" value="${s.r === '' || s.r == null ? '' : s.r}" placeholder="${ph.r ?? ''}" aria-label="Reps, set ${j + 1}">
+        ${k === 'weight' ? `<input inputmode="decimal" enterkeyhint="next" data-in="w" data-i="${i}" data-j="${j}" value="${s.w === '' || s.w == null ? '' : s.w}" placeholder="${ph.w ?? ''}" aria-label="Weight in kg, set ${j + 1}">` : ''}
+        <input inputmode="numeric" enterkeyhint="done" data-in="r" data-i="${i}" data-j="${j}" value="${s.r === '' || s.r == null ? '' : s.r}" placeholder="${ph.r ?? ''}" aria-label="${rLabel}, set ${j + 1}">
         <button class="tick" data-act="tick" data-i="${i}" data-j="${j}" aria-label="Set ${j + 1} done">✓</button></div>`;
     }).join('')}</div>
     <div class="ex-foot"><button class="link" data-act="addSet" data-i="${i}">+ Add set</button><button class="link muted" data-act="exMenu" data-i="${i}">More</button></div></section>`;
@@ -538,7 +625,7 @@ function viewHistory() {
     out += `<button class="hist" data-act="openSession" data-id="${s.id}">
       <div class="day"><b>${new Date(s.start).getDate()}</b><span>${DOW[new Date(s.start).getDay()]}</span></div>
       <div><h3>${esc(s.name)} ${t.prs ? `<span class="tag pr">★ ${t.prs}</span>` : ''}</h3>
-      <p>${s.items.length} exercises · ${t.sets} sets · ${fmtVol(t.vol)}${mins ? ` · ${mins} min` : ''}</p></div></button>`;
+      <p>${[`${s.items.length} exercises`, `${t.sets} sets`, workTxt(t), mins ? `${mins} min` : ""].filter(Boolean).join(" · ")}</p></div></button>`;
   });
   return out;
 }
@@ -551,44 +638,53 @@ function exUsage() {
 }
 function viewProgress() {
   if (!S.sessions.length) return '<section class="card empty"><b>Nothing to chart yet</b>Log a few workouts to see your lifts grow.</section>';
+  const gym = me().mode === 'gym';
   const weeks = Array.from({ length: 8 }, (_, k) => 7 - k).map(off => {
     const a = weekStart(off), b = a + 7 * DAY;
-    let vol = 0, n = 0;
-    S.sessions.forEach(s => { if (s.start >= a && s.start < b) { n++; vol += sessionTotals(s).vol; } });
-    return { vol, n, label: fmtDate(a, { day: 'numeric', month: 'short' }) };
+    let vol = 0, n = 0, sets = 0;
+    S.sessions.forEach(s => { if (s.start >= a && s.start < b) { n++; const t = sessionTotals(s); vol += t.vol; sets += t.sets; } });
+    return { vol, n, sets, label: fmtDate(a, { day: 'numeric', month: 'short' }) };
   });
   const used = exUsage();
   if (!progEx || !used.some(([id]) => id === progEx)) progEx = used[0]?.[0];
   let exBlock = '';
   if (progEx) {
-    const pts = [];
+    // Weights: estimated 1-rep max per session. Bodyweight: most reps, or longest hold in seconds.
+    const k = kindOf(progEx), pts = [];
     let heavy = null, best = null;
     S.sessions.forEach(s => s.items.forEach(it => {
       if (it.ex !== progEx) return;
       let top = null;
       doneSets(it).forEach(x => {
-        const e = e1rm(x.w, x.r);
+        const e = score(k, x);
         if (!top || e > top.e) top = { e, w: x.w, r: x.r };
-        if (!heavy || x.w > heavy.w) heavy = x;
+        if (!heavy || (x.w || 0) > (heavy.w || 0)) heavy = x;
         if (!best || e > best.e) best = { e, w: x.w, r: x.r, d: s.start };
       });
-      if (top && top.e > 0) pts.push({ x: s.start, y: top.e, w: top.w, r: top.r });
+      if (top && top.e > 0) pts.push({ x: s.start, y: k === 'weight' ? top.e : top.r, w: top.w, r: top.r });
     }));
+    const unit = k === 'time' ? 's' : k === 'reps' ? 'reps' : 'kg';
+    const tiles = k === 'weight'
+      ? `<div class="stat"><b>${best ? fmtKg(best.e) : '–'}<small>kg</small></b><span>Est. 1-rep max</span></div>
+        <div class="stat"><b>${heavy ? fmtKg(heavy.w) : '–'}<small>kg</small></b><span>Heaviest set</span></div>`
+      : `<div class="stat"><b>${best ? best.r : '–'}<small>${unit}</small></b><span>${k === 'time' ? 'Longest hold' : 'Most reps'}</span></div>
+        <div class="stat"><b>${pts.length ? Math.round(pts.reduce((a, p) => a + p.r, 0) / pts.length) : '–'}<small>${unit}</small></b><span>Average best</span></div>`;
+    const chartTitle = k === 'weight' ? 'Est. 1-rep max per session (kg)' : k === 'time' ? 'Longest hold per session (seconds)' : 'Most reps per session';
     exBlock = `<section class="card"><select class="ex-pick" data-in="progEx" aria-label="Exercise">
       ${used.map(([id, n]) => `<option value="${id}" ${id === progEx ? 'selected' : ''}>${esc(exName(id))} (${n})</option>`).join('')}</select>
-      <div class="stats" style="margin-top:10px">
-        <div class="stat"><b>${best ? fmtKg(best.e) : '–'}<small>kg</small></b><span>Est. 1-rep max</span></div>
-        <div class="stat"><b>${heavy ? fmtKg(heavy.w) : '–'}<small>kg</small></b><span>Heaviest set</span></div>
-        <div class="stat"><b>${pts.length}</b><span>Sessions</span></div></div>
-      ${pts.length > 1 ? `<h3 class="ch">Est. 1-rep max per session (kg)</h3><div class="chart">${lineChart({ pts })}</div>` : '<p class="muted small">Do this exercise twice to see a trend.</p>'}
-      <div class="list">${pts.slice(-5).reverse().map(p => `<div class="li"><span>${fmtDate(p.x)}</span><span class="r">${fmtKg(p.w)} kg × ${p.r} <span class="muted">≈ ${fmtKg(p.y)} kg</span></span></div>`).join('')}</div></section>`;
+      <div class="stats" style="margin-top:10px">${tiles}<div class="stat"><b>${pts.length}</b><span>Sessions</span></div></div>
+      ${pts.length > 1 ? `<h3 class="ch">${chartTitle}</h3><div class="chart">${lineChart({ pts })}</div>` : '<p class="muted small">Do this exercise twice to see a trend.</p>'}
+      <div class="list">${pts.slice(-5).reverse().map(p => `<div class="li"><span>${fmtDate(p.x)}</span><span class="r">${fmtSet(k, p)}${k === 'weight' ? ` <span class="muted">≈ ${fmtKg(p.y)} kg</span>` : ''}</span></div>`).join('')}</div></section>`;
   }
   const board = used.map(([id]) => {
+    const k = kindOf(id);
     let b = null;
-    S.sessions.forEach(s => s.items.forEach(it => { if (it.ex === id) doneSets(it).forEach(x => { const e = e1rm(x.w, x.r); if (!b || e > b.e) b = { e, w: x.w, r: x.r }; }); }));
-    return b && b.e ? `<div class="li"><span>${esc(exName(id))}</span><span class="r">${fmtKg(b.w)} kg × ${b.r}</span></div>` : '';
+    S.sessions.forEach(s => s.items.forEach(it => { if (it.ex === id) doneSets(it).forEach(x => { const e = score(k, x); if (!b || e > b.e) b = { e, w: x.w, r: x.r }; }); }));
+    return b && b.e ? `<div class="li"><span>${esc(exName(id))}</span><span class="r">${fmtSet(k, b)}</span></div>` : '';
   }).join('');
-  return exBlock + `<section class="card"><h2>Weekly volume (kg lifted)</h2><div class="chart">${barChart(weeks.map(w => w.vol), weeks.map(w => w.label), fmtVol)}</div>
+  return exBlock + (gym
+    ? `<section class="card"><h2>Weekly volume (kg lifted)</h2><div class="chart">${barChart(weeks.map(w => w.vol), weeks.map(w => w.label), fmtVol)}</div>`
+    : `<section class="card"><h2>Sets per week</h2><div class="chart">${barChart(weeks.map(w => w.sets), weeks.map(w => w.label), n => `${n}`)}</div>`) + `
     <p class="muted small">Workouts per week: ${weeks.map(w => w.n).join(' · ')}</p></section>
     ${board ? `<section class="card"><h2>Best sets</h2><div class="list">${board}</div></section>` : ''}`;
 }
@@ -689,17 +785,18 @@ function startWorkout({ name, planId = null, exIds = [], vid = null, level = '',
 function tick(i, j) {
   const A = S.active, it = A.items[i], s = it.sets[j];
   if (s.done) { s.done = false; s.pr = false; save(); render(); return; }
-  const ph = placeholder(it, j, lastSets(it.ex, A.id));
-  if (s.w === '' || s.w == null) s.w = ph.w === '' ? 0 : +ph.w;
+  const k = kindOf(it.ex), ph = placeholder(it, j, lastSets(it.ex, A.id));
+  if (k !== 'weight') s.w = 0;
+  else if (s.w === '' || s.w == null) s.w = ph.w === '' ? 0 : +ph.w;
   if (s.r === '' || s.r == null) s.r = ph.r === '' ? '' : +ph.r;
-  if (!(s.r > 0)) { toast('Enter the reps first'); return; }
+  if (!(s.r > 0)) { toast(k === 'time' ? 'Enter the seconds first' : 'Enter the reps first'); return; }
   s.done = true;
-  const best = bestE1(it.ex, A.id), e = e1rm(s.w, s.r);
-  const inSession = Math.max(0, ...it.sets.filter(x => x !== s && x.done).map(x => e1rm(x.w, x.r)));
+  const best = bestScore(it.ex, A.id), e = score(k, s);
+  const inSession = Math.max(0, ...it.sets.filter(x => x !== s && x.done).map(x => score(k, x)));
   if (best > 0 && e > best && e > inSession) {
     it.sets.forEach(x => { x.pr = false; });
     s.pr = true;
-    toast(`★ New best: ${exName(it.ex)} ${fmtKg(s.w)} kg × ${s.r}`);
+    toast(`★ New best: ${exName(it.ex)} ${fmtSet(k, s)}`);
     confetti(60);
     buzz([30, 40, 30]);
   } else buzz();
@@ -744,9 +841,11 @@ function openSession(id, justDone = false) {
   if (!s) return;
   const t = sessionTotals(s), mins = s.end ? Math.round((s.end - s.start) / 60000) : 0;
   openSheet(`${sheetHead(justDone ? 'Workout saved' : esc(s.name), `${justDone ? esc(s.name) + ' · ' : ''}${fmtDate(s.start)}${mins ? ` · ${mins} min` : ''}`)}
-    <div class="stats"><div class="stat"><b>${t.sets}</b><span>Sets</span></div><div class="stat"><b>${fmtVol(t.vol).replace(/ (kg|t)$/, '<small>$1</small>')}</b><span>Lifted</span></div><div class="stat ${t.prs ? 'down' : ''}"><b>${t.prs}</b><span>New bests</span></div></div>
+    <div class="stats"><div class="stat"><b>${t.sets}</b><span>Sets</span></div>
+      ${t.vol ? `<div class="stat"><b>${fmtVol(t.vol).replace(/ (kg|t)$/, '<small>$1</small>')}</b><span>Lifted</span></div>` : `<div class="stat"><b>${t.reps}</b><span>Reps${t.secs ? ` · ${clock(t.secs)} held` : ''}</span></div>`}
+      <div class="stat ${t.prs ? 'down' : ''}"><b>${t.prs}</b><span>New bests</span></div></div>
     ${s.items.map((it, i) => `<div><div class="head"><h3 class="sh">${esc(exName(it.ex))}</h3>${clipsFor(it).length ? `<button class="btn ghost small" data-act="formH" data-id="${s.id}" data-i="${i}">▶ ${it.stamp ? clock(it.stamp.t) : 'Form'}</button>` : ''}</div><div class="list">${it.sets.map((x, k) =>
-      `<div class="li"><span class="muted">Set ${k + 1}</span><span class="r">${fmtKg(x.w || 0)} kg × ${x.r}${x.pr ? ' <span class="tag pr">★ Best</span>' : ''}</span></div>`).join('')}</div></div>`).join('')}
+      `<div class="li"><span class="muted">Set ${k + 1}</span><span class="r">${fmtSet(kindOf(it.ex), x)}${x.pr ? ' <span class="tag pr">★ Best</span>' : ''}</span></div>`).join('')}</div></div>`).join('')}
     <div class="row"><button class="btn grow" data-act="repeat" data-id="${s.id}">Repeat this workout</button><button class="btn danger" data-act="delSession" data-id="${s.id}">Delete</button></div>`);
 }
 
@@ -769,6 +868,8 @@ function exMenu(i) {
     <button class="btn ghost block" data-act="exMove" data-i="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''}>Move up</button>
     <button class="btn ghost block" data-act="exMove" data-i="${i}" data-d="1" ${i === S.active.items.length - 1 ? 'disabled' : ''}>Move down</button>
     <button class="btn ghost block" data-act="exSwap" data-i="${i}">Swap for another exercise</button>
+    <div><h3 class="sh">Log this exercise as</h3><div class="chips">${Object.entries(KINDS).map(([k, l]) =>
+      `<button class="chip ${kindOf(it.ex) === k ? 'on' : ''}" data-act="exKind" data-i="${i}" data-k="${k}">${l}</button>`).join('')}</div></div>
     <button class="btn ghost block" data-act="delSet" data-i="${i}" ${it.sets.length <= 1 ? 'disabled' : ''}>Remove last set</button>
     <button class="btn danger block" data-act="delEx" data-i="${i}">Remove exercise</button>`);
 }
@@ -991,7 +1092,9 @@ function editPlan(id) {
 
 function openSettings() {
   const s = S.settings;
-  openSheet(`${sheetHead('Settings')}
+  openSheet(`${sheetHead(`Settings · ${me().name}`)}
+    <button class="person on" data-act="who" data-p="${person}"><span class="av">${me().name[0]}</span><span><b>${me().name}</b><small>Tap to switch person</small></span><span class="go">›</span></button>
+    <label class="f">My goal<select data-in="aim">${AIMS.map(a => `<option ${a === (s.aim || me().aim) ? 'selected' : ''}>${a}</option>`).join('')}</select></label>
     <div><h3 class="sh">Workouts</h3><div class="list">
       <button class="li" data-act="editWeek"><span>Weekly plan</span><span class="r muted">${WEEK_ORDER.map(d => planById(S.week[d]) ? DOW[d][0] : '·').join(' ')} ›</span></button>
       ${S.plans.map(p => `<button class="li" data-act="editPlan" data-id="${p.id}"><span>${esc(p.name)}</span><span class="r muted">${p.ex.length} exercises ›</span></button>`).join('')}
@@ -1169,13 +1272,19 @@ const ACT = {
     planDraft = null; save(); closeSheet(); render();
   },
   theme: b => { S.settings.theme = b.dataset.t; save(); applyTheme(); openSettings(); },
-  exportJson: () => download(`lift-log-backup-${isoDay(Date.now())}.json`, JSON.stringify(S, null, 1), 'application/json'),
+  who: whoSheet,
+  switchTo: b => switchPerson(b.dataset.id),
+  exKind: b => { const x = exById(S.active.items[+b.dataset.i].ex); if (x) { x.kind = b.dataset.k; save(); closeSheet(); render(); } },
+  exportJson: () => download(`lift-log-${person}-backup-${isoDay(Date.now())}.json`, JSON.stringify({ ...S, person }, null, 1), 'application/json'),
   importJson: () => $('#importFile').click(),
   exportCsv: () => {
     const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['date', 'workout', 'exercise', 'set', 'weight_kg', 'reps']];
-    S.sessions.forEach(s => s.items.forEach(it => it.sets.forEach((x, k) => rows.push([isoDay(s.start), s.name, exName(it.ex), k + 1, x.w || 0, x.r]))));
-    download(`lift-log-sets-${isoDay(Date.now())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
+    const rows = [['person', 'date', 'workout', 'exercise', 'set', 'weight_kg', 'reps', 'seconds']];
+    S.sessions.forEach(s => s.items.forEach(it => {
+      const time = kindOf(it.ex) === 'time';
+      it.sets.forEach((x, k) => rows.push([me().name, isoDay(s.start), s.name, exName(it.ex), k + 1, x.w || 0, time ? '' : x.r, time ? x.r : '']));
+    }));
+    download(`lift-log-${person}-sets-${isoDay(Date.now())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   },
   install: async () => {
     buzz();
@@ -1261,6 +1370,7 @@ document.addEventListener('change', e => {
   else if (k === 'weekday') { S.week[+el.dataset.d] = el.value || null; save(); render(); }
   else if (k === 'rest') { S.settings.rest = +el.value; save(); }
   else if (k === 'level') { S.settings.level = el.value; save(); }
+  else if (k === 'aim') { S.settings.aim = el.value; save(); render(); }
   else if (k === 'exGroup') { const x = exById(el.dataset.id); if (x) { x.group = el.value; save(); render(); } }
   else if (k === 'goal') { S.settings.goal = num(el.value); save(); render(); }
   else if (k === 'wake') { S.settings.wake = el.checked; save(); if (el.checked) wake(); else unwake(); }
@@ -1320,6 +1430,23 @@ function toast(msg) {
 function applyTheme() {
   const t = S.settings.theme;
   if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  // Each person has their own colours, and their initial on the switch button.
+  document.documentElement.dataset.person = person;
+  const w = $('#whoBtn');
+  if (w) { w.textContent = me().name[0]; w.title = me().name; }
+}
+function whoSheet() {
+  openSheet(`${sheetHead('Who is training?')}
+    <div class="people">${PEOPLE.map(p => {
+      let st = null;
+      try { st = JSON.parse(localStorage.getItem(keyFor(p.id))); } catch (e) { /* nothing saved */ }
+      if (p.id === person) st = S;
+      const n = st?.sessions?.length || 0, aim = st?.settings?.aim || p.aim;
+      return `<button class="person ${p.id === person ? 'on' : ''}" data-act="switchTo" data-id="${p.id}" data-p="${p.id}">
+        <span class="av">${p.name[0]}</span><span><b>${p.name}</b><small>${p.mode === 'gym' ? 'Gym · weights' : 'Home · bodyweight'} · ${esc(aim)}</small>
+        <small>${n} workout${n === 1 ? '' : 's'} logged${st?.active ? ' · workout in progress' : ''}</small></span>${p.id === person ? '<span class="tag ok">Now</span>' : ''}</button>`;
+    }).join('')}</div>
+    <p class="muted small">Each person has their own plan, videos, workouts, weights and goals on this phone.</p>`);
 }
 /* ---------- install ---------- */
 const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
