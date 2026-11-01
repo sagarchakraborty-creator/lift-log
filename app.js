@@ -62,7 +62,7 @@ function defaults() {
     ex, plans, sessions: [], active: null, body: [], videos: [],
     // week[getDay()] = plan id, or null for a rest day
     week: [null, push, pull, legs, push, pull, legs],
-    settings: { goal: null, rest: 90, wake: true, theme: 'auto', level: 'beg' },
+    settings: { goal: null, rest: 90, wake: true, theme: 'auto', level: 'beg', play: 'app' },
   };
 }
 function load() {
@@ -160,6 +160,19 @@ function parseYT(s) {
   return id && /^[\w-]{11}$/.test(id) ? { id, t } : null;
 }
 const watchUrl = (yt, t = 0) => `https://www.youtube.com/watch?v=${yt}${t ? `&t=${Math.floor(t)}s` : ''}`;
+// Ad-free playback: hand the video to the YouTube app, which is signed in with your Premium account.
+const adFree = () => S.settings.play !== 'inapp';
+function ytAppUrl(yt, t = 0) {
+  const ua = navigator.userAgent, s = Math.floor(t);
+  if (/Android/i.test(ua)) return `intent://www.youtube.com/watch?v=${yt}&t=${s}s#Intent;scheme=https;package=com.google.android.youtube;S.browser_fallback_url=${encodeURIComponent(watchUrl(yt, s))};end`;
+  if (/iPhone|iPad|iPod/i.test(ua)) return `youtube://www.youtube.com/watch?v=${yt}&t=${s}s`;
+  return watchUrl(yt, s);
+}
+function openYT(yt, t = 0) {
+  buzz();
+  const url = ytAppUrl(yt, t);
+  if (url.startsWith('https:')) window.open(url, '_blank', 'noopener'); else location.href = url;
+}
 const thumb = yt => `https://i.ytimg.com/vi/${yt}/mqdefault.jpg`;
 async function ytInfo(yt) {
   try {
@@ -269,7 +282,8 @@ async function mountPlayer(el, yt, t = 0) {
   const div = document.createElement('div');
   el.replaceChildren(div);
   player = new YT.Player(div, {
-    videoId: yt, host: 'https://www.youtube-nocookie.com',
+    // Standard host (not privacy mode) so a YouTube sign-in in this browser, and its Premium, applies.
+    videoId: yt, host: 'https://www.youtube.com',
     playerVars: { start: Math.floor(t), autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
   });
 }
@@ -714,6 +728,13 @@ let curClips = [];
 function openClip(it) {
   curClips = clipsFor(it);
   if (!curClips.length) return;
+  if (adFree()) {
+    // One clip: straight into the YouTube app. Several: pick the trainer first.
+    if (curClips.length === 1) { openYT(curClips[0].v.yt, curClips[0].t); return; }
+    openSheet(`${sheetHead(esc(exName(it.ex)), 'Opens in the YouTube app, no ads')}<div class="list">${curClips.map(c =>
+      `<button class="li" data-act="ytOpen" data-yt="${c.v.yt}" data-t="${c.t}"><span><b>${esc(c.v.trainer || c.v.title)}</b> ${levelTag(c.level)}${c.note ? `<br><span class="muted small">${esc(c.note)}</span>` : ''}</span><span class="r"><span class="tchip">▶ ${clock(c.t)}</span></span></button>`).join('')}</div>`);
+    return;
+  }
   openSheet(`${sheetHead(esc(exName(it.ex)))}<div class="vid" id="vp"></div><div id="clipInfo"></div>
     ${curClips.length > 1 ? `<div><h3 class="sh">Other trainers</h3><div class="list">${curClips.map((c, k) =>
       `<button class="li" data-act="clip" data-k="${k}"><span>${esc(c.v.trainer || c.v.title)} ${levelTag(c.level)}</span><span class="r muted">${clock(c.t)}</span></button>`).join('')}</div></div>` : ''}`,
@@ -724,7 +745,7 @@ function showClip(k) {
   $('#clipInfo').innerHTML = `<p class="small"><b>${esc(c.v.trainer || 'Video')}</b> ${levelTag(c.level)} · ${esc(c.v.title)} · at ${clock(c.t)}</p>
     ${c.note ? `<p class="note">${esc(c.note)}</p>` : ''}
     <div class="row"><button class="btn ghost small" data-act="seek" data-t="${c.t}">↺ Back to ${clock(c.t)}</button>
-    <a class="btn ghost small" href="${watchUrl(c.v.yt, c.t)}" target="_blank" rel="noopener">Open in YouTube ↗</a></div>`;
+    <button class="btn ghost small" data-act="ytOpen" data-yt="${c.v.yt}" data-t="${c.t}">YouTube app ↗</button></div>`;
   mountPlayer($('#vp'), c.v.yt, c.t);
 }
 
@@ -781,7 +802,7 @@ function saveVideo() {
   buzz([20, 30, 20]);
   toast(r ? `Linked ${exName(r.ex)} at ${clock(r.t)}${r.p ? ` → ${r.p.name}` : ''}` : 'Video saved');
   if (r) confetti(40);
-  openVideo(v.id, r ? r.t : p.t);
+  openVideo(v.id, r ? (adFree() ? null : r.t) : p.t);
 }
 let curVid = null, vLevel = '';
 // Level chips in a video: filter the stamp list, set the level for new stamps, and pick which level to train.
@@ -797,10 +818,15 @@ function openVideo(id, t0 = null) {
   curVid = v.id;
   // Open on your own level when the video has stamps for it, otherwise show everything.
   vLevel = v.stamps.some(s => s.level === S.settings.level) ? S.settings.level : '';
+  const af = adFree();
   openSheet(`${sheetHead(esc(v.title), esc(v.trainer || ''))}
-    <div class="vid" id="vp"></div>
-    <div class="row"><button class="btn grow" data-act="stampNow">⏱ Stamp at <span id="nowT" class="num">0:00</span></button>
-      <a class="btn ghost" href="${watchUrl(v.yt)}" target="_blank" rel="noopener">YouTube ↗</a></div>
+    ${af ? `<button class="vid ytthumb" data-act="ytOpen" data-yt="${v.yt}" data-t="${t0 || 0}"><img src="${thumb(v.yt)}" alt="">
+        <span class="playbig">▶</span><span class="ytlabel">Play in YouTube app · no ads</span></button>
+      <p class="muted small">Stamp an exercise: in YouTube pause at it → Share → tick <b>Start at</b> → Copy link, then tap Paste link.</p>
+      <div class="row"><button class="btn grow" data-act="pasteStamp">📋 Paste link</button><button class="btn ghost" data-act="stampNow">⏱ Type time</button></div>`
+    : `<div class="vid" id="vp"></div>
+      <div class="row"><button class="btn grow" data-act="stampNow">⏱ Stamp at <span id="nowT" class="num">0:00</span></button>
+      <button class="btn ghost" data-act="ytOpen" data-yt="${v.yt}" data-t="0">YouTube app ↗</button></div>`}
     <div id="stampForm"></div>
     <div><div class="head"><h3 class="sh">Exercises in this video</h3></div>
       <div class="chips" id="lvChips">${levelChips()}</div><div id="stampList" class="list"></div></div>
@@ -815,6 +841,7 @@ function openVideo(id, t0 = null) {
       <div class="row"><button class="btn grow" data-act="saveVidInfo">Save</button><button class="btn danger" data-act="delVideo">Delete video</button></div></details>
     ${exDatalist()}`, () => {
     renderStamps();
+    if (af) { if (t0) stampForm(null, t0); return; }
     mountPlayer($('#vp'), v.yt, t0 ?? 0);
     nowTimer = setInterval(() => { const el = $('#nowT'); if (el) el.textContent = clock(playerTime()); }, 500);
   });
@@ -826,10 +853,10 @@ function renderStamps() {
   document.querySelectorAll('.lvName').forEach(x => { x.textContent = vLevel ? LEVELS[vLevel] : ''; });
   const list = [...v.stamps].filter(s => !vLevel || !s.level || s.level === vLevel).sort((a, b) => a.t - b.t);
   el.innerHTML = list.length ? list.map(s => `<div class="li stamp">
-      <button class="tchip" data-act="seek" data-t="${s.t}">▶ ${clock(s.t)}</button>
+      <button class="tchip" ${adFree() ? `data-act="ytOpen" data-yt="${v.yt}"` : 'data-act="seek"'} data-t="${s.t}">▶ ${clock(s.t)}</button>
       <div class="grow"><b>${esc(exName(s.ex))}</b> ${vLevel ? '' : levelTag(s.level)}<br><span class="muted small">${esc(exById(s.ex)?.group || '')}${s.note ? ` · ${esc(s.note)}` : ''}</span></div>
       <button class="link" data-act="editStamp" data-id="${s.id}">Edit</button></div>`).join('')
-    : `<p class="muted small">${v.stamps.length ? 'Nothing stamped at this level yet.' : 'None yet. Play the video and tap ⏱ Stamp when an exercise starts.'}</p>`;
+    : `<p class="muted small">${v.stamps.length ? 'Nothing stamped at this level yet.' : adFree() ? 'None yet. Copy a link at the exercise in YouTube and tap Paste link.' : 'None yet. Play the video and tap ⏱ Stamp when an exercise starts.'}</p>`;
 }
 const groupSelect = (id, val) => `<select id="${id}">${GROUPS.map(g => `<option ${g === val ? 'selected' : ''}>${g}</option>`).join('')}</select>`;
 // The fields for one timestamp: time, exercise, body part, level, note, and which workout it belongs to.
@@ -912,6 +939,13 @@ function openSettings() {
       <button class="li" data-act="newPlan"><b>+ New workout</b></button></div></div>
     <div class="grid2"><label class="f">Rest timer<select data-in="rest">${[0, 45, 60, 90, 120, 150, 180, 240].map(v => `<option value="${v}" ${v === s.rest ? 'selected' : ''}>${v ? clock(v) + ' min' : 'Off'}</option>`).join('')}</select></label>
       <label class="f">Goal weight (kg)<input inputmode="decimal" data-in="goal" value="${s.goal ?? ''}" placeholder="e.g. 70"></label></div>
+    <div><h3 class="sh">Videos</h3><div class="chips">
+      <button class="chip ${s.play !== 'inapp' ? 'on' : ''}" data-act="playMode" data-m="app">YouTube app · no ads</button>
+      <button class="chip ${s.play === 'inapp' ? 'on' : ''}" data-act="playMode" data-m="inapp">Inside Lift Log</button></div>
+      <p class="muted small">${s.play !== 'inapp'
+        ? 'Clips open in the YouTube app at the exact second, signed in with your Premium account, so there are no ads.'
+        : 'Videos play inside Lift Log. They are ad-free only while you are signed in to YouTube Premium in this browser; on iPhone they will usually show ads.'}</p>
+      <a class="btn ghost block" href="https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F" target="_blank" rel="noopener">Sign in to YouTube ↗</a></div>
     <label class="f">My level (which trainer clips to show first)<select data-in="level">${Object.entries(LEVELS).map(([k, l]) => `<option value="${k}" ${k === s.level ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <details><summary>Exercises and body parts (${S.ex.length})</summary><div class="list">${[...S.ex].sort((a, b) => a.name.localeCompare(b.name)).map(e =>
       `<label class="li"><span>${esc(e.name)}</span><select class="ex-pick narrow" data-in="exGroup" data-id="${e.id}">${GROUPS.map(g => `<option ${g === e.group ? 'selected' : ''}>${g}</option>`).join('')}</select></label>`).join('')}</div></details>
@@ -947,6 +981,18 @@ const ACT = {
   exSwap: b => { const i = +b.dataset.i; pickExercise(id => { const it = S.active.items[i]; it.ex = id; delete it.stamp; save(); closeSheet(); render(); }, 'Swap for'); },
   delSet: b => { S.active.items[+b.dataset.i].sets.pop(); save(); closeSheet(); render(); },
   delEx: b => { S.active.items.splice(+b.dataset.i, 1); save(); closeSheet(); render(); },
+  ytOpen: b => openYT(b.dataset.yt, +b.dataset.t || 0),
+  // Ad-free stamping: a link copied in YouTube with "Start at" carries the second of the exercise.
+  pasteStamp: async () => {
+    const v = vById(curVid);
+    let p = null;
+    try { p = parseYT(((await navigator.clipboard.readText()).match(/https?:\/\/\S+/) || [''])[0]); } catch (e) { /* no clipboard access */ }
+    if (!p) { stampForm(null, 0); $('#sT').focus(); toast('Could not read a link: type the time instead'); return; }
+    if (p.id !== v.yt) { toast('That link is for a different video'); return; }
+    if (!p.t) toast('No start time in that link: tick “Start at” in YouTube, or type the time');
+    stampForm(null, p.t);
+  },
+  playMode: b => { S.settings.play = b.dataset.m; save(); openSettings(); },
   form: b => openClip(S.active.items[+b.dataset.i]),
   formH: b => { const s = S.sessions.find(x => x.id === b.dataset.id); if (s) openClip(s.items[+b.dataset.i]); },
   clip: b => showClip(+b.dataset.k),
