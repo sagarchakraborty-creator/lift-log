@@ -356,7 +356,7 @@ function viewTrain() {
     hero = `<section class="card hero restday">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">Rest day</h2>
       <p>Recover, walk, stretch. Want to train anyway? Pick a workout below.</p></section>`;
   }
-  return hero + weekStrip() + coverage() + `
+  return installCard() + hero + weekStrip() + coverage() + `
     <section><div class="head"><h2>All workouts</h2><button class="link" data-act="newPlan">+ New</button></div>
     <div class="plans">${S.plans.map(planCard).join('')}</div>
     <button class="btn ghost block" style="margin-top:10px" data-act="startEmpty">Start an empty workout</button></section>`;
@@ -954,7 +954,7 @@ function openSettings() {
     <div><h3 class="sh">Backup</h3><p class="muted small">Your data lives only on this phone. Save a backup now and then.</p>
       <div class="row"><button class="btn ghost grow" data-act="exportJson">Save backup</button><button class="btn ghost grow" data-act="importJson">Restore backup</button></div>
       <button class="btn ghost block" style="margin-top:8px" data-act="exportCsv">Export sets as CSV</button></div>
-    ${installEvt ? '<button class="btn block" data-act="install">Install Lift Log on this phone</button>' : ''}
+    ${isInstalled() ? '' : '<button class="btn block" data-act="install">⬇ Install Lift Log on this phone</button>'}
     <button class="link danger-link" data-act="wipe">Erase all data</button>`);
 }
 
@@ -1104,7 +1104,20 @@ const ACT = {
     S.sessions.forEach(s => s.items.forEach(it => it.sets.forEach((x, k) => rows.push([isoDay(s.start), s.name, exName(it.ex), k + 1, x.w || 0, x.r]))));
     download(`lift-log-sets-${isoDay(Date.now())}.csv`, rows.map(r => r.map(q).join(',')).join('\n'), 'text/csv');
   },
-  install: async () => { if (!installEvt) return; installEvt.prompt(); await installEvt.userChoice; installEvt = null; closeSheet(); },
+  install: async () => {
+    buzz();
+    // Chrome/Edge on Android or desktop: the browser's own one-tap install box.
+    if (installEvt) {
+      closeSheet();
+      installEvt.prompt();
+      const { outcome } = await installEvt.userChoice;
+      installEvt = null;
+      if (outcome !== 'accepted') toast('Not installed. Tap Install app again any time');
+      return;
+    }
+    installSteps();
+  },
+  hideInstall: () => { try { localStorage.setItem('liftlog.installHide', '1'); } catch (e) { /* private mode */ } render(); },
   wipe: () => {
     if (!confirm('Erase every workout, video and weigh-in on this phone?')) return;
     if (!confirm('Really erase everything? This cannot be undone.')) return;
@@ -1235,7 +1248,42 @@ function applyTheme() {
   const t = S.settings.theme;
   if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
 }
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; });
+/* ---------- install ---------- */
+const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function installCard() {
+  let hidden = false;
+  try { hidden = localStorage.getItem('liftlog.installHide') === '1'; } catch (e) { /* private mode */ }
+  if (isInstalled() || hidden) return '';
+  return `<section class="card installcard"><img src="icons/icon-192.png" alt="" width="52" height="52">
+    <div><b>Get Lift Log on your home screen</b><p>Opens full-screen like a normal app and works offline.</p></div>
+    <div class="row"><button class="btn" data-act="install">⬇ Install app</button><button class="link" data-act="hideInstall">Not now</button></div></section>`;
+}
+// When the browser has no one-tap install box (iPhone, or Android before Chrome offers it), show the steps.
+function installSteps() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/i.test(ua), android = /Android/i.test(ua);
+  const iosOther = ios && /CriOS|FxiOS|EdgiOS/i.test(ua);
+  let steps;
+  if (ios && iosOther) steps = ['Copy this page’s link, then open it in <b>Safari</b> (iPhone can only install from Safari)', 'In Safari, tap <b>Share</b> <span class="key">⬆</span> at the bottom', 'Scroll and tap <b>Add to Home Screen</b>', 'Tap <b>Add</b>'];
+  else if (ios) steps = ['Tap <b>Share</b> <span class="key">⬆</span> at the bottom of Safari', 'Scroll down and tap <b>Add to Home Screen</b>', 'Tap <b>Add</b> at the top right', 'Open <b>Lift Log</b> from your home screen'];
+  else if (android) steps = ['Tap the <b>⋮</b> menu at the top right of Chrome', 'Tap <b>Install app</b> (or <b>Add to Home screen</b>)', 'Tap <b>Install</b>', 'Open <b>Lift Log</b> from your home screen or app drawer'];
+  else steps = ['In Chrome or Edge, click the <b>install icon</b> <span class="key">⊕</span> at the right of the address bar', 'Click <b>Install</b>', 'For your phone, open this link there:<br><b>sagarchakraborty-creator.github.io/lift-log</b>'];
+  openSheet(`${sheetHead('Install Lift Log', ios ? 'iPhone' : android ? 'Android' : 'Computer')}
+    <ol class="isteps">${steps.map(s => `<li><span>${s}</span></li>`).join('')}</ol>
+    ${ios && !iosOther ? '<p class="muted small">The Share button is the square with an arrow, in the bar at the bottom (or top on iPad).</p>' : ''}
+    <button class="btn ghost block" data-act="copyLink">Copy app link</button>
+    <button class="btn block" data-act="close">Got it</button>`);
+}
+ACT.copyLink = async () => {
+  try { await navigator.clipboard.writeText('https://sagarchakraborty-creator.github.io/lift-log/'); toast('Link copied'); } catch (e) { toast('sagarchakraborty-creator.github.io/lift-log'); }
+};
+function showInstallBtn() { $('#installBtn').hidden = isInstalled(); }
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; showInstallBtn(); });
+window.addEventListener('appinstalled', () => {
+  installEvt = null; showInstallBtn(); render();
+  toast('Lift Log installed 🎉 Open it from your home screen'); confetti(120);
+});
+matchMedia('(display-mode: standalone)').addEventListener?.('change', () => { showInstallBtn(); render(); });
 
 // New versions apply silently: the page reloads once nothing is open or being typed into.
 if ('serviceWorker' in navigator) {
@@ -1250,6 +1298,7 @@ if ('serviceWorker' in navigator) {
 
 /* ---------- start ---------- */
 applyTheme();
+showInstallBtn();
 const hash = location.hash.slice(1);
 if (VIEWS[hash]) view = hash;
 // Share → Lift Log from the YouTube app arrives as ?text=… or ?url=… (manifest share_target).
