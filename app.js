@@ -18,37 +18,30 @@ const STARTER_EX = [
   ['Calf raise', 'Calves'], ['Hip thrust', 'Glutes'], ['Walking lunge', 'Glutes'],
   ['Plank', 'Core'], ['Hanging leg raise', 'Core'], ['Cable crunch', 'Core'],
 ];
-// The weekly plan Sagar follows: Jeet Selal's 5-day bro split, 4–5 exercises a day, 3 sets of 6–8 and 10–12 reps.
-// [getDay(), workout name, [exercise, body part]…]; Thursday and Sunday are rest days.
+// The weekly plan Sagar follows: Jeet Selal's 5-day bro split, 3 sets of 6–8 and 10–12 reps.
+// [getDay(), workout name, body parts]; Thursday and Sunday are rest days. The days start empty:
+// he fills them himself from trainer videos (stamp an exercise → Add to workout).
 const BRO_SPLIT = {
   source: 'Jeet Selal · 5-day bro split', target: '3 sets · 6–8 and 10–12 reps',
   days: [
-    [1, 'Chest day', [['Bench press', 'Chest'], ['Incline dumbbell press', 'Chest'], ['Cable crossover', 'Chest'], ['Pec deck fly', 'Chest'], ['Dips', 'Chest']]],
-    [2, 'Leg day', [['Squat', 'Quads'], ['Leg press', 'Quads'], ['Romanian deadlift', 'Hamstrings'], ['Leg curl', 'Hamstrings'], ['Calf raise', 'Calves']]],
-    [3, 'Back day', [['Deadlift', 'Back'], ['Pull-up', 'Back'], ['Lat pulldown', 'Back'], ['Barbell row', 'Back'], ['Seated cable row', 'Back']]],
-    [5, 'Shoulder day', [['Overhead press', 'Shoulders'], ['Lateral raise', 'Shoulders'], ['Front raise', 'Shoulders'], ['Rear delt fly', 'Shoulders'], ['Shrug', 'Shoulders']]],
-    [6, 'Arm day', [['Biceps curl', 'Biceps'], ['Hammer curl', 'Biceps'], ['Triceps pushdown', 'Triceps'], ['Skull crusher', 'Triceps'], ['Overhead triceps extension', 'Triceps']]],
+    [1, 'Chest day', ['Chest']],
+    [2, 'Leg day', ['Quads', 'Hamstrings', 'Glutes', 'Calves']],
+    [3, 'Back day', ['Back']],
+    [5, 'Shoulder day', ['Shoulders']],
+    [6, 'Arm day', ['Biceps', 'Triceps', 'Forearms']],
   ],
 };
-// Puts the bro split into a saved state: adds its workouts (reusing exercises you already have, so your history
-// and "last time" weights carry over), sets Mon–Sun to it, and drops the old unused Push/Pull/Legs starters.
+// Resets the week to the five empty bro-split days and removes every other workout. Plan ids are reused by name,
+// and sessions are untouched, so history and "last time" weights stay.
 function applyBroSplit(st) {
-  const key = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
-  const exId = (name, group) => {
-    let e = st.ex.find(x => key(x.name) === key(name));
-    if (!e) { e = { id: uid(), name, group }; st.ex.push(e); }
-    return e.id;
-  };
-  const used = new Set(st.sessions.map(s => s.planId));
-  st.plans = st.plans.filter(p => !(['Push', 'Pull', 'Legs'].includes(p.name) && !used.has(p.id) && !p.vid && !Object.keys(p.clips || {}).length));
   st.week = [null, null, null, null, null, null, null];
-  BRO_SPLIT.days.forEach(([dow, name, list]) => {
-    let p = st.plans.find(x => x.name === name);
-    if (!p) { p = { id: uid(), name, ex: list.map(([n, g]) => exId(n, g)) }; st.plans.push(p); }
-    Object.assign(p, { target: BRO_SPLIT.target, source: BRO_SPLIT.source });
+  st.plans = BRO_SPLIT.days.map(([dow, name, parts]) => {
+    const old = st.plans.find(p => p.name === name);
+    const p = { id: old?.id || uid(), name, ex: [], parts, target: BRO_SPLIT.target, source: BRO_SPLIT.source };
     st.week[dow] = p.id;
+    return p;
   });
-  st.split = 'bro1';
+  st.split = 'bro2';
   return st;
 }
 const MEAS = [['waist', 'Waist'], ['chest', 'Chest'], ['arm', 'Arm'], ['hip', 'Hips'], ['thigh', 'Thigh']];
@@ -97,8 +90,8 @@ function load() {
       const d = defaults(), st = { ...d, ...s, settings: { ...d.settings, ...s.settings } };
       // Play mode v2: videos play inside the app with your YouTube sign-in (earlier versions defaulted to the YouTube app).
       if (s.settings?.playV !== 2) Object.assign(st.settings, { play: 'inapp', playV: 2 });
-      // One-time switch of the weekly plan to the bro split he asked for (2026-11-01).
-      if (s.split !== 'bro1') { applyBroSplit(st); try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* saved on next change */ } }
+      // One-time reset of the week to the empty bro-split days he asked for (2026-11-01).
+      if (s.split !== 'bro2') { applyBroSplit(st); try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* saved on next change */ } }
       return st;
     }
   } catch (e) { /* nothing saved yet */ }
@@ -279,6 +272,8 @@ const levelTag = l => (l ? `<span class="tag lv-${l}">${LEVELS[l]}</span>` : '')
 const pickStamp = (v, ex, level) => v.stamps.find(s => s.ex === ex && s.level === level) || v.stamps.find(s => s.ex === ex && !s.level) || v.stamps.find(s => s.ex === ex);
 const videoExIds = (v, level) => [...new Set([...v.stamps].filter(s => !level || !s.level || s.level === level).sort((a, b) => a.t - b.t).map(s => s.ex))];
 const targets = exIds => [...new Set(exIds.map(id => exById(id)?.group).filter(g => g && g !== 'Other'))];
+// A workout's body parts: from its exercises, or the parts the day is meant for while it is still empty.
+const targetsOf = p => [...new Set([...targets(p.ex), ...(p.ex.length ? [] : p.parts || [])])];
 const BP_COLORS = {
   Chest: '#ef4444', Back: '#3b82f6', Shoulders: '#f59e0b', Biceps: '#8b5cf6', Triceps: '#ec4899', Forearms: '#a16207',
   Core: '#14b8a6', Quads: '#22c55e', Hamstrings: '#65a30d', Glutes: '#f97316', Calves: '#06b6d4', Cardio: '#e11d48', Other: '#64748b',
@@ -403,11 +398,13 @@ function viewTrain() {
   } else if (plan) {
     const v = plan.vid && vById(plan.vid);
     hero = `<section class="card hero">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">${esc(plan.name)}</h2>
-      <div class="chiprow">${targets(plan.ex).map(bpChip).join('')}</div>
+      <div class="chiprow">${targetsOf(plan).map(bpChip).join('')}</div>
       ${plan.target ? `<p class="small"><b>🎯 ${esc(plan.target)}</b>${plan.source ? ` · ${esc(plan.source)}` : ''}</p>` : ''}
       ${v ? `<p class="small">▶ ${esc(v.trainer || v.title)}${plan.level ? ` · ${LEVELS[plan.level]}` : ''}</p>` : ''}
-      <ol class="exlist">${plan.ex.map(id => `<li>${esc(exName(id))}${hasClip(id, plan) ? ' <span class="clip">▶</span>' : ''}</li>`).join('')}</ol>
-      <button class="btn block big-btn" data-act="startPlan" data-id="${plan.id}">Start ${esc(plan.name)} ›</button></section>`;
+      ${plan.ex.length ? `<ol class="exlist">${plan.ex.map(id => `<li>${esc(exName(id))}${hasClip(id, plan) ? ' <span class="clip">▶</span>' : ''}</li>`).join('')}</ol>
+      <button class="btn block big-btn" data-act="startPlan" data-id="${plan.id}">Start ${esc(plan.name)} ›</button>`
+      : `<p>No exercises yet. Add them from your trainer's video: stamp each exercise and pick <b>${esc(plan.name)}</b>.</p>
+      <button class="btn block big-btn" data-act="fillPlan" data-id="${plan.id}">▶ Add exercises from a video</button>`}</section>`;
   } else {
     hero = `<section class="card hero restday">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">Rest day</h2>
       <p>Recover, walk, stretch. Want to train anyway? Pick a workout below.</p></section>`;
@@ -440,7 +437,7 @@ function weekStrip() {
 function coverage() {
   const ws = weekStart(), done = {}, planned = {};
   S.sessions.forEach(s => { if (s.start >= ws) s.items.forEach(it => { const g = exById(it.ex)?.group; if (g) done[g] = (done[g] || 0) + doneSets(it).length; }); });
-  WEEK_ORDER.forEach(d => { const p = planById(S.week[d]); if (p) targets(p.ex).forEach(g => { (planned[g] = planned[g] || []).push(DOW[d]); }); });
+  WEEK_ORDER.forEach(d => { const p = planById(S.week[d]); if (p) targetsOf(p).forEach(g => { (planned[g] = planned[g] || []).push(DOW[d]); }); });
   const main = GROUPS.filter(g => !['Forearms', 'Cardio', 'Other'].includes(g));
   const missing = main.filter(g => !planned[g] && !done[g]);
   // Bars fill toward 10 hard sets per body part per week, a common target for growth.
@@ -458,13 +455,14 @@ function planCard(p) {
   const v = p.vid && vById(p.vid);
   const days = WEEK_ORDER.filter(d => S.week[d] === p.id).map(d => DOW[d]);
   const names = p.ex.map(exName);
-  const tg = targets(p.ex);
-  return `<button class="plan" data-act="startPlan" data-id="${p.id}" style="--c:${BP_COLORS[tg[0]] || 'var(--navy)'}">
+  const tg = targetsOf(p);
+  const empty = !p.ex.length;
+  return `<button class="plan" data-act="${empty ? 'fillPlan' : 'startPlan'}" data-id="${p.id}" style="--c:${BP_COLORS[tg[0]] || 'var(--navy)'}">
     <h3>${esc(p.name)} ${days.length ? `<span class="tag">${days.join(' · ')}</span>` : ''}</h3>
     <div class="chiprow">${tg.map(bpChip).join('')}</div>
-    <p>${esc(names.slice(0, 4).join(', '))}${names.length > 4 ? ` +${names.length - 4}` : ''}</p>
+    <p>${empty ? 'No exercises yet: add them from a video' : `${esc(names.slice(0, 4).join(', '))}${names.length > 4 ? ` +${names.length - 4}` : ''}`}</p>
     <p>${v ? `▶ ${esc(v.trainer || 'Video')} ${p.level ? `(${LEVELS[p.level]})` : ''} · ` : ''}${ago(lastDone(p.id))}</p>
-    <span class="go">Start ›</span></button>`;
+    <span class="go">${empty ? '+ Add' : 'Start ›'}</span></button>`;
 }
 
 /* Active workout */
@@ -742,7 +740,7 @@ function openSheet(html, after) {
   if (after) after();
 }
 function closeSheet() { if (sheet.open) sheet.close(); }
-sheet.addEventListener('close', () => { killPlayer(); if (pendingReload) location.reload(); });
+sheet.addEventListener('close', () => { killPlayer(); planHint = null; if (pendingReload) location.reload(); });
 sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
 const sheetHead = (title, sub = '') => `<div class="head"><div><h2>${title}</h2>${sub ? `<p class="muted small">${sub}</p>` : ''}</div><button class="x" data-act="close" aria-label="Close">✕</button></div>`;
 const exDatalist = () => `<datalist id="exList">${S.ex.map(e => `<option value="${esc(e.name)}">`).join('')}</datalist>`;
@@ -810,6 +808,16 @@ function showClip(k) {
 // Add video: 1 open YouTube and copy the link (with "Start at" for the exact second),
 // 2 paste it here, 3 timestamp the exercise and link it into a workout, all in one sheet.
 const ytSearch = q => (q.trim() ? `https://www.youtube.com/results?search_query=${encodeURIComponent(q.trim())}` : 'https://www.youtube.com/');
+let planHint = null;
+function pickVideoFor(p) {
+  planHint = p.id;
+  if (!S.videos.length) { addVideo(); return; }
+  openSheet(`${sheetHead(`Fill ${esc(p.name)}`, 'Pick the trainer video, then stamp each exercise')}
+    <button class="btn block" data-act="addVideo">+ Add a new YouTube video</button>
+    <div class="vlist">${[...S.videos].sort((a, b) => b.added - a.added).map(v => `<button class="vcard" data-act="openVideo" data-id="${v.id}">
+      <img src="${thumb(v.yt)}" alt="" loading="lazy" width="320" height="180"><div><h3>${esc(v.title)}</h3><p>${esc(v.trainer || '')}</p>
+      <p>${v.stamps.length} exercise${v.stamps.length === 1 ? '' : 's'} stamped</p></div></button>`).join('')}</div>`);
+}
 function addVideo(prefill = '') {
   const trainers = [...new Set(S.videos.map(v => v.trainer).filter(Boolean))];
   openSheet(`${sheetHead('Add a video', 'Link a YouTube video and timestamp the exercise')}
@@ -920,7 +928,7 @@ const groupSelect = (id, val) => `<select id="${id}">${GROUPS.map(g => `<option 
 function stampFields(s, t, lv, v = null) {
   const inPlan = s && v ? S.plans.find(p => p.clips?.[s.ex]?.v === v.id && p.clips[s.ex].t === s.t) : null;
   const today = planById(S.week[new Date().getDay()]);
-  const sel = inPlan ? inPlan.id : (!s && today ? today.id : '');
+  const sel = inPlan ? inPlan.id : (!s ? (planHint && planById(planHint) ? planHint : today ? today.id : '') : '');
   return `<div class="grid2">
       <label class="f">Time in video<input id="sT" ${timeAttrs} value="${clock(t)}"></label>
       <label class="f">Exercise<input id="sEx" list="exList" value="${s ? esc(exName(s.ex)) : ''}" placeholder="e.g. Bench press" autocomplete="off"></label>
@@ -1072,6 +1080,8 @@ const ACT = {
   cancelBody: () => { bodyDate = null; render(); },
   delBody: () => { if (!confirm('Delete this entry?')) return; S.body = S.body.filter(b => b.d !== bodyDate); bodyDate = null; save(); render(); },
   addVideo: () => addVideo(),
+  // An empty day: pick one of your videos to stamp from, or add a new one; new stamps default to this day.
+  fillPlan: b => { const p = planById(b.dataset.id); if (!p) return; pickVideoFor(p); },
   saveVideo,
   openVideo: b => openVideo(b.dataset.id),
   vFilter: b => { vFilter = b.dataset.t; render(); },
