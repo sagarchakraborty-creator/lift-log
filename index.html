@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lift Log</title>
+<meta name="description" content="Log gym workouts set by set, track personal bests, body weight and measurements.">
+<meta name="theme-color" content="#1f4e79">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Lift Log">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;800&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div>
+      <h1 id="title">Train</h1>
+      <p id="subtitle" class="sub"></p>
+    </div>
+    <button id="setBtn" class="icon-btn" type="button" aria-label="Settings">⚙</button>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<div id="rest" class="rest" hidden>
+  <div class="rest-in">
+    <span>Rest</span>
+    <b id="restTime">1:30</b>
+    <button type="button" data-rest="-15">−15s</button>
+    <button type="button" data-rest="15">+15s</button>
+    <button type="button" data-rest="stop">Skip</button>
+  </div>
+</div>
+
+<nav class="tabs" aria-label="Sections">
+  <button type="button" data-view="train" class="on"><span class="ti">▲</span>Train</button>
+  <button type="button" data-view="videos"><span class="ti">▶</span>Videos</button>
+  <button type="button" data-view="history"><span class="ti">☰</span>History</button>
+  <button type="button" data-view="progress"><span class="ti">↗</span>Progress</button>
+  <button type="button" data-view="body"><span class="ti">◉</span>Body</button>
+</nav>
+
+<dialog id="sheet" class="sheet"><div id="sheetBody"></div></dialog>
+<div id="toast" class="toast" role="status" hidden></div>
+<input id="importFile" type="file" accept="application/json,.json" hidden>
+
+<script src="app.js"></script>
+</body>
+</html>
