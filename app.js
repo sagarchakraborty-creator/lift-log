@@ -92,7 +92,7 @@ const GUESS = [
   [/wrist|forearm|grip|farmer/, 'Forearms'],
   [/lateral|shoulder|overhead press|military|arnold|delt|face pull|upright row|shrug/, 'Shoulders'],
   [/row|pulldown|pull.?up|chin.?up|lat\b|deadlift|back ext|pullover/, 'Back'],
-  [/bench|chest|fly|flye|push.?up|pec|incline|decline|press/, 'Chest'],
+  [/bench|chest|fly|flye|crossover|cross.?over|push.?up|pec|incline|decline|press/, 'Chest'],
   [/plank|crunch|sit.?up|ab\b|abs|core|(leg|knee) raise|twist|hollow|dead bug|mountain/, 'Core'],
   [/run|bike|cycle|row(ing)? machine|jump|burpee|skipping|cardio|hiit/, 'Cardio'],
 ];
@@ -211,6 +211,36 @@ const levelTag = l => (l ? `<span class="tag lv-${l}">${LEVELS[l]}</span>` : '')
 const pickStamp = (v, ex, level) => v.stamps.find(s => s.ex === ex && s.level === level) || v.stamps.find(s => s.ex === ex && !s.level) || v.stamps.find(s => s.ex === ex);
 const videoExIds = (v, level) => [...new Set([...v.stamps].filter(s => !level || !s.level || s.level === level).sort((a, b) => a.t - b.t).map(s => s.ex))];
 const targets = exIds => [...new Set(exIds.map(id => exById(id)?.group).filter(g => g && g !== 'Other'))];
+const BP_COLORS = {
+  Chest: '#ef4444', Back: '#3b82f6', Shoulders: '#f59e0b', Biceps: '#8b5cf6', Triceps: '#ec4899', Forearms: '#a16207',
+  Core: '#14b8a6', Quads: '#22c55e', Hamstrings: '#65a30d', Glutes: '#f97316', Calves: '#06b6d4', Cardio: '#e11d48', Other: '#64748b',
+};
+const bpChip = g => `<span class="bpchip" style="--c:${BP_COLORS[g] || BP_COLORS.Other}">${esc(g)}</span>`;
+const buzz = (ms = 12) => { try { navigator.vibrate?.(ms); } catch (e) { /* no vibration */ } };
+let justTicked = null;
+
+// Confetti burst for new bests and finished workouts.
+function confetti(n = 90) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const c = document.createElement('canvas');
+  c.id = 'confetti';
+  document.body.appendChild(c);
+  const dpr = devicePixelRatio || 1, W = c.width = innerWidth * dpr, H = c.height = innerHeight * dpr, ctx = c.getContext('2d');
+  const cols = ['#3b5bfd', '#7c3aed', '#db2777', '#f97316', '#10b981', '#06b6d4', '#facc15'];
+  const ps = Array.from({ length: n }, () => ({
+    x: W / 2 + (Math.random() - 0.5) * W * 0.3, y: H * 0.45, vx: (Math.random() - 0.5) * 16 * dpr, vy: (-Math.random() * 16 - 6) * dpr,
+    s: (5 + Math.random() * 6) * dpr, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4, c: cols[Math.floor(Math.random() * cols.length)],
+  }));
+  const t0 = performance.now();
+  (function frame(t) {
+    ctx.clearRect(0, 0, W, H);
+    ps.forEach(p => {
+      p.vy += 0.45 * dpr; p.vx *= 0.99; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c; ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2); ctx.restore();
+    });
+    if (t - t0 < 2600) requestAnimationFrame(frame); else c.remove();
+  })(t0);
+}
 
 /* ---------- YouTube player (IFrame API, so the stamp button can read the current second) ---------- */
 let ytLoad = null, player = null, nowTimer = 0;
@@ -255,11 +285,21 @@ function seek(t) { try { player.seekTo(t, true); player.playVideo(); } catch (e)
 const TITLES = { train: 'Train', videos: 'Videos', history: 'History', progress: 'Progress', body: 'Body' };
 const VIEWS = { train: viewTrain, videos: viewVideos, history: viewHistory, progress: viewProgress, body: viewBody };
 
+let shownView = null;
 function render() {
   $('#title').textContent = view === 'train' && S.active ? 'Workout' : TITLES[view];
   $('#subtitle').textContent = subtitle();
-  $('#main').innerHTML = VIEWS[view]();
+  const main = $('#main');
+  main.innerHTML = VIEWS[view]();
+  // Cards slide in only when you switch tabs, not on every tap inside a tab.
+  main.classList.toggle('enter', shownView !== view);
+  shownView = view;
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    main.querySelectorAll('[data-pct]').forEach(c => { c.style.strokeDasharray = `${c.dataset.pct} 100`; });
+    main.querySelectorAll('[data-w]').forEach(f => { f.style.width = f.dataset.w + '%'; });
+  }));
+  justTicked = null;
 }
 function go(v) {
   view = v;
@@ -285,28 +325,37 @@ function viewTrain() {
   const plan = planById(S.week[new Date().getDay()]);
   const doneToday = sessionsOn(todayIso);
   let hero;
+  const top = tag => `<div class="hero-top"><span class="tag">${tag}</span>${weekRing()}</div>`;
   if (doneToday.length) {
     const t = sessionTotals(doneToday[doneToday.length - 1]);
-    hero = `<section class="card hero done"><span class="tag ok">Done today</span><h2>${esc(doneToday[doneToday.length - 1].name)}</h2>
-      <p class="muted">${t.sets} sets · ${fmtVol(t.vol)} lifted${t.prs ? ` · ${t.prs} new best${t.prs === 1 ? '' : 's'}` : ''}</p>
+    hero = `<section class="card hero done">${top('✓ Done today')}<h2 class="big">${esc(doneToday[doneToday.length - 1].name)}</h2>
+      <p>${t.sets} sets · ${fmtVol(t.vol)} lifted${t.prs ? ` · ★ ${t.prs} new best${t.prs === 1 ? '' : 's'}` : ''}</p>
       <button class="btn ghost" data-act="openSession" data-id="${doneToday[doneToday.length - 1].id}">See workout</button></section>`;
   } else if (plan) {
     const v = plan.vid && vById(plan.vid);
-    hero = `<section class="card hero"><span class="tag">Today · ${DOW_LONG[new Date().getDay()]}</span><h2 class="big">${esc(plan.name)}</h2>
-      <p class="targets">Targets: ${esc(targets(plan.ex).join(' · ') || '–')}</p>
-      ${v ? `<p class="muted small">▶ ${esc(v.trainer || v.title)} ${levelTag(plan.level)}</p>` : ''}
+    hero = `<section class="card hero">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">${esc(plan.name)}</h2>
+      <div class="chiprow">${targets(plan.ex).map(bpChip).join('')}</div>
+      ${v ? `<p class="small">▶ ${esc(v.trainer || v.title)}${plan.level ? ` · ${LEVELS[plan.level]}` : ''}</p>` : ''}
       <ol class="exlist">${plan.ex.map(id => `<li>${esc(exName(id))}${hasClip(id, plan) ? ' <span class="clip">▶</span>' : ''}</li>`).join('')}</ol>
-      <button class="btn block big-btn" data-act="startPlan" data-id="${plan.id}">Start ${esc(plan.name)}</button></section>`;
+      <button class="btn block big-btn" data-act="startPlan" data-id="${plan.id}">Start ${esc(plan.name)} ›</button></section>`;
   } else {
-    hero = `<section class="card hero"><span class="tag">Today · ${DOW_LONG[new Date().getDay()]}</span><h2 class="big">Rest day</h2>
-      <p class="muted">Recover, walk, stretch. Want to train anyway? Pick a workout below.</p></section>`;
+    hero = `<section class="card hero restday">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">Rest day</h2>
+      <p>Recover, walk, stretch. Want to train anyway? Pick a workout below.</p></section>`;
   }
   return hero + weekStrip() + coverage() + `
     <section><div class="head"><h2>All workouts</h2><button class="link" data-act="newPlan">+ New</button></div>
     <div class="plans">${S.plans.map(planCard).join('')}</div>
     <button class="btn ghost block" style="margin-top:10px" data-act="startEmpty">Start an empty workout</button></section>`;
 }
-const hasClip = (exId, plan) => (plan.vid && vById(plan.vid)?.stamps.some(s => s.ex === exId)) || S.videos.some(v => v.stamps.some(s => s.ex === exId));
+// Workouts done this week against the days your weekly plan has a workout.
+function weekRing() {
+  const planned = S.week.filter(Boolean).length, ws = weekStart();
+  const done = new Set(S.sessions.filter(s => s.start >= ws).map(s => isoDay(s.start))).size;
+  const pct = planned ? Math.min(100, done / planned * 100) : 0;
+  return `<div class="ring-wrap" title="Workouts this week"><svg viewBox="0 0 36 36"><circle class="rt" cx="18" cy="18" r="15.9"/>
+    <circle class="rp" cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="0 100" data-pct="${pct}"/></svg><b>${done}/${planned}</b><small>This week</small></div>`;
+}
+const hasClip = (exId, plan) => !!plan.clips?.[exId] || (plan.vid && vById(plan.vid)?.stamps.some(s => s.ex === exId)) || S.videos.some(v => v.stamps.some(s => s.ex === exId));
 function weekStrip() {
   const ws = weekStart(), todayIso = isoDay(Date.now());
   const firstIso = S.sessions.length ? isoDay(S.sessions[0].start) : todayIso;
@@ -324,22 +373,25 @@ function coverage() {
   WEEK_ORDER.forEach(d => { const p = planById(S.week[d]); if (p) targets(p.ex).forEach(g => { (planned[g] = planned[g] || []).push(DOW[d]); }); });
   const main = GROUPS.filter(g => !['Forearms', 'Cardio', 'Other'].includes(g));
   const missing = main.filter(g => !planned[g] && !done[g]);
+  // Bars fill toward 10 hard sets per body part per week, a common target for growth.
   const rows = main.filter(g => planned[g] || done[g]).map(g => {
     const n = done[g] || 0;
-    return `<div class="bp"><span>${g}</span><span class="muted small">${planned[g] ? [...new Set(planned[g])].join(', ') : 'Not planned'}</span>
-      <b class="${n ? 'ok' : ''}">${n ? `${n} set${n === 1 ? '' : 's'}` : '–'}</b></div>`;
+    return `<div class="bpbar" style="--c:${BP_COLORS[g]}"><span class="nm">${g}</span>
+      <div class="track"><i class="fill" data-w="${Math.min(100, n * 10)}"></i></div><span class="v"><b>${n}</b> / 10 sets</span>
+      <span class="days">${planned[g] ? 'Planned ' + [...new Set(planned[g])].join(', ') : 'Not in your plan'}</span></div>`;
   }).join('');
   return `<section class="card"><div class="head"><h2>Body parts this week</h2></div>
-    <div class="bps"><div class="bp hdr"><span>Body part</span><span>Planned on</span><b>Done</b></div>${rows}</div>
+    <div class="bps">${rows}</div>
     ${missing.length ? `<p class="miss">Not in your week: <b>${missing.join(', ')}</b>. Add an exercise for ${missing.length === 1 ? 'it' : 'them'} to one of your workouts.</p>` : '<p class="muted small">Your week trains every major body part.</p>'}</section>`;
 }
 function planCard(p) {
   const v = p.vid && vById(p.vid);
   const days = WEEK_ORDER.filter(d => S.week[d] === p.id).map(d => DOW[d]);
   const names = p.ex.map(exName);
-  return `<button class="plan" data-act="startPlan" data-id="${p.id}">
+  const tg = targets(p.ex);
+  return `<button class="plan" data-act="startPlan" data-id="${p.id}" style="--c:${BP_COLORS[tg[0]] || 'var(--navy)'}">
     <h3>${esc(p.name)} ${days.length ? `<span class="tag">${days.join(' · ')}</span>` : ''}</h3>
-    <p class="targets">${esc(targets(p.ex).join(' · '))}</p>
+    <div class="chiprow">${tg.map(bpChip).join('')}</div>
     <p>${esc(names.slice(0, 4).join(', '))}${names.length > 4 ? ` +${names.length - 4}` : ''}</p>
     <p>${v ? `▶ ${esc(v.trainer || 'Video')} ${p.level ? `(${LEVELS[p.level]})` : ''} · ` : ''}${ago(lastDone(p.id))}</p>
     <span class="go">Start ›</span></button>`;
@@ -348,9 +400,13 @@ function planCard(p) {
 /* Active workout */
 function viewActive() {
   const A = S.active;
+  const total = A.items.reduce((a, it) => a + it.sets.length, 0), done = A.items.reduce((a, it) => a + doneSets(it).length, 0);
+  const pct = total ? Math.round(done / total * 100) : 0;
   return `<section class="card live"><div><h2>${esc(A.name)}</h2>
       <span class="muted small">Started ${new Date(A.start).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })} · <span id="elapsed" class="num">${clock((Date.now() - A.start) / 1000)}</span></span></div>
-      <button class="btn amber" data-act="finish">Finish</button></section>
+      <button class="btn amber" data-act="finish">Finish</button>
+      <div style="width:100%"><div class="prog"><i style="width:${pct}%"></i></div>
+      <div class="pct"><span>${done} of ${total} sets</span><span>${pct}%${pct === 100 ? ' · Tap Finish 🎉' : ''}</span></div></div></section>
     ${A.items.map(exCard).join('')}
     <button class="btn ghost block" data-act="addEx">+ Add exercise</button>
     <button class="link danger-link" data-act="discard">Discard workout</button>`;
@@ -363,13 +419,14 @@ function placeholder(it, j, last) {
 function exCard(it, i) {
   const lt = lastTime(it.ex, S.active.id), last = lt?.sets || [];
   const clips = clipsFor(it);
-  return `<section class="card ex" id="ex-${i}"><div class="head"><div><h3>${esc(exName(it.ex))}</h3><span class="muted small">${esc(exById(it.ex)?.group || '')}</span></div>
+  const g = exById(it.ex)?.group;
+  return `<section class="card ex" id="ex-${i}" style="--c:${BP_COLORS[g] || 'var(--navy)'}"><div class="head"><div><h3>${esc(exName(it.ex))}</h3>${g ? bpChip(g) : ''}</div>
       ${clips.length ? `<button class="btn ghost small" data-act="form" data-i="${i}">▶ Form${it.stamp ? ` ${clock(it.stamp.t)}` : ''}</button>` : ''}</div>
     <p class="last">${lt ? `<b>Last time (${fmtDate(lt.date, { day: 'numeric', month: 'short' })}):</b> ` + last.map(s => `${fmtKg(s.w || 0)} kg × ${s.r}`).join(', ') : 'First time: pick a weight you can do with good form'}</p>
     <div class="sets"><div class="set hdr"><span class="n">Set</span><span>kg</span><span>Reps</span><span></span></div>
     ${it.sets.map((s, j) => {
       const ph = placeholder(it, j, last);
-      return `<div class="set ${s.done ? 'done' : ''}"><span class="n ${s.pr ? 'pr' : ''}">${s.pr ? '★' : j + 1}</span>
+      return `<div class="set ${s.done ? 'done' : ''} ${justTicked === `${i}-${j}` ? 'just' : ''}"><span class="n ${s.pr ? 'pr' : ''}">${s.pr ? '★' : j + 1}</span>
         <input inputmode="decimal" enterkeyhint="next" data-in="w" data-i="${i}" data-j="${j}" value="${s.w === '' || s.w == null ? '' : s.w}" placeholder="${ph.w ?? ''}" aria-label="Weight in kg, set ${j + 1}">
         <input inputmode="numeric" enterkeyhint="done" data-in="r" data-i="${i}" data-j="${j}" value="${s.r === '' || s.r == null ? '' : s.r}" placeholder="${ph.r ?? ''}" aria-label="Reps, set ${j + 1}">
         <button class="tick" data-act="tick" data-i="${i}" data-j="${j}" aria-label="Set ${j + 1} done">✓</button></div>`;
@@ -380,15 +437,17 @@ function exCard(it, i) {
 /* Videos */
 function viewVideos() {
   const trainers = [...new Set(S.videos.map(v => v.trainer).filter(Boolean))].sort();
+  const addCard = `<button class="card hero addv" data-act="addVideo"><div class="hero-top"><span class="tag">▶ YouTube</span><span class="plus">+</span></div>
+    <h2 class="big">Add video</h2><p>Open YouTube, copy the link at the exercise, paste it here and timestamp it into a workout.</p></button>`;
   if (!S.videos.length) {
-    return `<section class="card empty"><b>Your trainers' videos</b>
-      Add a YouTube workout video, then tap <b class="inline">⏱ Stamp</b> while it plays to mark when each exercise is shown.
-      In your workout, <b class="inline">▶ Form</b> opens the video at that exact second.<br><br>
-      <button class="btn" data-act="addVideo">+ Add video</button>
-      <p class="small">Tip: once the app is installed on Android, use Share → Lift Log from the YouTube app.</p></section>`;
+    return `${addCard}<section class="card"><h2>How it works</h2><div class="list">
+      <div class="li"><span>1. <b>Open YouTube</b> from Add video and find your trainer</span></div>
+      <div class="li"><span>2. Pause at the exercise → Share → tick <b>Start at</b> → Copy link</span></div>
+      <div class="li"><span>3. <b>Paste</b>, name the exercise and pick the workout it belongs to</span></div>
+      <div class="li"><span>4. In that workout, <b>▶ Form</b> opens the video at that exact second</span></div></div>
+      <p class="muted small">On Android, once installed: in YouTube tap Share → Lift Log.</p></section>`;
   }
-  return `<div class="row"><input class="search grow" type="search" placeholder="Search videos or exercises" data-in="vq" value="${esc(vQuery)}">
-    <button class="btn" data-act="addVideo">+ Add</button></div>
+  return `${addCard}<div class="row"><input class="search grow" type="search" placeholder="Search videos or exercises" data-in="vq" value="${esc(vQuery)}"></div>
     ${trainers.length > 1 ? `<div class="chips">${['All', ...trainers].map(t => `<button class="chip ${vFilter === t ? 'on' : ''}" data-act="vFilter" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
     <div id="vlist" class="vlist">${videoList()}</div>`;
 }
@@ -523,7 +582,8 @@ function lineChart({ pts, avg, goal }) {
   const X = x => L + (x - x0) / (x1 - x0) * (W - L - R), Y = y => T + (1 - (y - y0) / (y1 - y0)) * (H - T - B);
   const path = arr => arr.map((p, i) => `${i ? 'L' : 'M'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
   const dl = ms => fmtDate(ms, { day: 'numeric', month: 'short' });
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend chart">
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trend chart">${CHART_DEFS}
+    <path d="${path(avg || pts)}L${X((avg || pts)[(avg || pts).length - 1].x)},${H - B}L${X((avg || pts)[0].x)},${H - B}Z" fill="url(#la)"/>
     <text x="${L - 6}" y="${Y(hi) + 4}" text-anchor="end">${fmtKg(hi)}</text>
     <text x="${L - 6}" y="${Y(lo) + 4}" text-anchor="end">${fmtKg(lo)}</text>
     ${goal ? `<line class="goal" x1="${L}" x2="${W - R}" y1="${Y(goal)}" y2="${Y(goal)}"/>` : ''}
@@ -532,10 +592,15 @@ function lineChart({ pts, avg, goal }) {
     ${avg ? '' : pts.map(p => `<circle class="dot" cx="${X(p.x)}" cy="${Y(p.y)}" r="3.5"/>`).join('')}
     <text x="${L}" y="${H - 4}">${dl(x0)}</text><text x="${W - R}" y="${H - 4}" text-anchor="end">${dl(x1)}</text></svg>`;
 }
+const CHART_DEFS = `<defs>
+  <linearGradient id="lg" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="340" y2="0"><stop offset="0" stop-color="#3b5bfd"/><stop offset=".6" stop-color="#7c3aed"/><stop offset="1" stop-color="#db2777"/></linearGradient>
+  <linearGradient id="la" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7c3aed" stop-opacity=".22"/><stop offset="1" stop-color="#7c3aed" stop-opacity="0"/></linearGradient>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7c3aed"/><stop offset="1" stop-color="#3b5bfd"/></linearGradient>
+  <linearGradient id="bw" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f97316"/><stop offset="1" stop-color="#ef4444"/></linearGradient></defs>`;
 function barChart(vals, labels, fmt) {
   const W = 340, H = 150, T = 18, B = 20, n = vals.length, gap = 8, bw = (W - gap * (n - 1)) / n;
   const max = Math.max(...vals, 1);
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bar chart">${vals.map((v, i) => {
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Bar chart">${CHART_DEFS}${vals.map((v, i) => {
     const h = v / max * (H - T - B), x = i * (bw + gap), y = H - B - h;
     return `<rect class="bar ${i === n - 1 ? 'now' : ''}" x="${x}" y="${y}" width="${bw}" height="${Math.max(h, v ? 2 : 0)}" rx="4"/>
       ${v ? `<text x="${x + bw / 2}" y="${y - 5}" text-anchor="middle">${fmt(v)}</text>` : ''}
@@ -544,14 +609,16 @@ function barChart(vals, labels, fmt) {
 }
 
 /* ---------- workout actions ---------- */
-function startWorkout({ name, planId = null, exIds = [], vid = null, level = '' }) {
+function startWorkout({ name, planId = null, exIds = [], vid = null, level = '', clips = null }) {
   if (S.active && !confirm('A workout is already running. Replace it?')) return;
   const v = vid && vById(vid);
   S.active = {
     id: uid(), start: Date.now(), name, planId, ...(level ? { level } : {}),
     items: exIds.map(ex => {
-      const st = v && pickStamp(v, ex, level);
-      return { ex, sets: Array.from({ length: Math.max(3, lastSets(ex).length) }, () => ({ w: '', r: '', done: false })), ...(st ? { stamp: { v: v.id, t: st.t } } : {}) };
+      // A clip linked to this exercise in the workout wins; otherwise the workout's video at your level.
+      const own = clips?.[ex] && vById(clips[ex].v) ? clips[ex] : null;
+      const st = own ? { v: own.v, t: own.t } : v && pickStamp(v, ex, level) ? { v: v.id, t: pickStamp(v, ex, level).t } : null;
+      return { ex, sets: Array.from({ length: Math.max(3, lastSets(ex).length) }, () => ({ w: '', r: '', done: false })), ...(st ? { stamp: st } : {}) };
     }),
   };
   save(); closeSheet(); go('train'); wake();
@@ -570,8 +637,11 @@ function tick(i, j) {
     it.sets.forEach(x => { x.pr = false; });
     s.pr = true;
     toast(`★ New best: ${exName(it.ex)} ${fmtKg(s.w)} kg × ${s.r}`);
-  }
-  save(); render(); startRest();
+    confetti(60);
+    buzz([30, 40, 30]);
+  } else buzz();
+  save(); justTicked = `${i}-${j}`; render(); startRest();
+  if (it.sets.every(x => x.done)) toast(`${exName(it.ex)} done ✓`);
 }
 function finish() {
   const A = S.active;
@@ -587,6 +657,8 @@ function finish() {
   S.active = null;
   save(); stopRest(); unwake(); render();
   openSession(A.id, true);
+  confetti(140);
+  buzz([40, 60, 40, 60, 80]);
 }
 
 /* ---------- sheets ---------- */
@@ -657,34 +729,59 @@ function showClip(k) {
 }
 
 /* Video sheets: add, watch and stamp */
+// Add video: 1 open YouTube and copy the link (with "Start at" for the exact second),
+// 2 paste it here, 3 timestamp the exercise and link it into a workout, all in one sheet.
+const ytSearch = q => (q.trim() ? `https://www.youtube.com/results?search_query=${encodeURIComponent(q.trim())}` : 'https://www.youtube.com/');
 function addVideo(prefill = '') {
   const trainers = [...new Set(S.videos.map(v => v.trainer).filter(Boolean))];
-  openSheet(`${sheetHead('Add a video')}
-    <label class="f">YouTube link<input id="vUrl" type="url" inputmode="url" placeholder="https://youtu.be/…" value="${esc(prefill)}" autocomplete="off"></label>
-    <label class="f">Trainer<input id="vTrainer" list="trainerList" placeholder="Fills in from YouTube"></label>
-    <datalist id="trainerList">${trainers.map(t => `<option value="${esc(t)}">`).join('')}</datalist>
-    <label class="f">Title<input id="vTitle" placeholder="Fills in from YouTube"></label>
-    <button class="btn block" data-act="saveVideo">Save and start stamping</button>`, () => { if (prefill) lookupVideo(); });
+  openSheet(`${sheetHead('Add a video', 'Link a YouTube video and timestamp the exercise')}
+    <div class="step"><span class="sn">1</span><div class="grow"><b>Find it on YouTube</b>
+      <div class="row"><input id="ytQ" data-in="ytq" class="search grow" type="search" placeholder="Trainer or exercise" value="${esc(trainers[0] || '')}">
+      <a class="btn" id="ytGo" href="${ytSearch(trainers[0] || '')}" target="_blank" rel="noopener">Open ↗</a></div>
+      <p class="muted small">In the video, pause where the exercise starts → <b>Share</b> → tick <b>Start at</b> → <b>Copy link</b>.</p></div></div>
+    <div class="step"><span class="sn">2</span><div class="grow"><b>Paste the link</b>
+      <div class="row"><input id="vUrl" class="search grow" type="url" inputmode="url" placeholder="https://youtu.be/…" value="${esc(prefill)}" autocomplete="off">
+      <button class="btn ghost" data-act="pasteLink">📋 Paste</button></div><div id="vPrev"></div>
+      <div class="grid2" id="vMeta" hidden><label class="f">Trainer<input id="vTrainer" list="trainerList" placeholder="From YouTube"></label>
+      <label class="f">Title<input id="vTitle" placeholder="From YouTube"></label></div>
+      <datalist id="trainerList">${trainers.map(t => `<option value="${esc(t)}">`).join('')}</datalist></div></div>
+    <div class="step"><span class="sn">3</span><div class="grow"><b>Timestamp the exercise</b> <span class="muted small">(optional, you can add more later)</span>
+      <div class="inset">${stampFields(null, 0, S.settings.level)}</div></div></div>
+    ${exDatalist()}
+    <button class="btn block big-btn" data-act="saveVideo">Save video</button>`, () => { if (prefill) lookupVideo(); });
 }
 async function lookupVideo() {
   const p = parseYT($('#vUrl')?.value);
-  if (!p) return;
+  const prev = $('#vPrev');
+  if (!prev) return;
+  if (!p) { prev.innerHTML = $('#vUrl').value.trim() ? '<p class="warn small">That is not a YouTube link.</p>' : ''; return; }
+  $('#vMeta').hidden = false;
+  if (p.t && $('#sT')) $('#sT').value = clock(p.t);
+  prev.innerHTML = `<div class="vprev"><img src="${thumb(p.id)}" alt=""><div><b id="vpT">Loading…</b><p class="muted small">${p.t ? `Starts at <b>${clock(p.t)}</b>, used as the timestamp` : 'No start time in the link: type the time below'}</p></div></div>`;
   const info = await ytInfo(p.id);
+  if ($('#vpT')) $('#vpT').textContent = info?.title || 'YouTube video';
   if (!info) return;
   if ($('#vTitle') && !$('#vTitle').value) $('#vTitle').value = info.title || '';
   if ($('#vTrainer') && !$('#vTrainer').value) $('#vTrainer').value = info.author_name || '';
 }
 function saveVideo() {
   const p = parseYT($('#vUrl').value);
-  if (!p) { toast('That does not look like a YouTube link'); return; }
+  if (!p) { toast('Paste a YouTube link first'); return; }
+  const wantsStamp = $('#sEx').value.trim();
+  if (wantsStamp && parseClock($('#sT').value) == null) { toast('Time should look like 4:35'); return; }
   let v = S.videos.find(x => x.yt === p.id);
   if (!v) {
     v = { id: uid(), yt: p.id, title: $('#vTitle').value.trim() || 'YouTube video', trainer: $('#vTrainer').value.trim(), added: Date.now(), stamps: [] };
     S.videos.push(v);
-    save();
-    if (view === 'videos') render();
-  } else toast('Already saved: opening it');
-  openVideo(v.id, p.t);
+  }
+  let r = null;
+  if (wantsStamp) r = stampFromForm(v, '');
+  save();
+  if (view === 'videos' || view === 'train') render();
+  buzz([20, 30, 20]);
+  toast(r ? `Linked ${exName(r.ex)} at ${clock(r.t)}${r.p ? ` → ${r.p.name}` : ''}` : 'Video saved');
+  if (r) confetti(40);
+  openVideo(v.id, r ? r.t : p.t);
 }
 let curVid = null, vLevel = '';
 // Level chips in a video: filter the stamp list, set the level for new stamps, and pick which level to train.
@@ -735,14 +832,46 @@ function renderStamps() {
     : `<p class="muted small">${v.stamps.length ? 'Nothing stamped at this level yet.' : 'None yet. Play the video and tap ⏱ Stamp when an exercise starts.'}</p>`;
 }
 const groupSelect = (id, val) => `<select id="${id}">${GROUPS.map(g => `<option ${g === val ? 'selected' : ''}>${g}</option>`).join('')}</select>`;
-function stampForm(s, t) {
-  const lv = s ? s.level || '' : vLevel;
-  $('#stampForm').innerHTML = `<div class="inset"><div class="grid2">
-      <label class="f">Time<input id="sT" inputmode="numeric" value="${clock(t)}"></label>
+// The fields for one timestamp: time, exercise, body part, level, note, and which workout it belongs to.
+function stampFields(s, t, lv, v = null) {
+  const inPlan = s && v ? S.plans.find(p => p.clips?.[s.ex]?.v === v.id && p.clips[s.ex].t === s.t) : null;
+  const today = planById(S.week[new Date().getDay()]);
+  const sel = inPlan ? inPlan.id : (!s && today ? today.id : '');
+  return `<div class="grid2">
+      <label class="f">Time in video<input id="sT" inputmode="numeric" value="${clock(t)}"></label>
       <label class="f">Exercise<input id="sEx" list="exList" value="${s ? esc(exName(s.ex)) : ''}" placeholder="e.g. Bench press" autocomplete="off"></label>
       <label class="f">Body part${groupSelect('sGroup', s ? exById(s.ex)?.group : 'Chest')}</label>
       <label class="f">Level<select id="sLevel"><option value="">All levels</option>${Object.entries(LEVELS).map(([k, l]) => `<option value="${k}" ${k === lv ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
-    <label class="f">Note (sets, reps, cues)<input id="sNote" value="${esc(s?.note || '')}" placeholder="e.g. 3 × 10, slow negatives"></label>
+    <label class="f">Add to workout<select id="sPlan"><option value="">Don't add to a workout</option>
+      ${S.plans.map(p => { const d = WEEK_ORDER.filter(x => S.week[x] === p.id).map(x => DOW[x]).join(', '); return `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}${d ? ` (${d})` : ''}</option>`; }).join('')}
+      <option value="new">+ New workout…</option></select></label>
+    <label class="f">Note (sets, reps, cues)<input id="sNote" value="${esc(s?.note || '')}" placeholder="e.g. 3 × 10, slow negatives"></label>`;
+}
+// Saves the stamp from the form; if a workout is picked, the exercise joins it, linked to this second of the video.
+function stampFromForm(v, sid) {
+  const t = parseClock($('#sT').value), ex = resolveEx($('#sEx').value);
+  if (t == null) { toast('Time should look like 4:35'); return null; }
+  if (!ex) { toast('Type the exercise name'); return null; }
+  exById(ex).group = $('#sGroup').value;
+  const note = $('#sNote').value.trim(), level = $('#sLevel').value, old = v.stamps.find(x => x.id === sid);
+  if (old) Object.assign(old, { t, ex, note, level }); else v.stamps.push({ id: uid(), t, ex, note, level });
+  const pid = $('#sPlan').value;
+  let p = null;
+  if (pid === 'new') {
+    const name = prompt('Name the new workout', v.trainer ? `${v.trainer} workout` : 'New workout');
+    if (name && name.trim()) { p = { id: uid(), name: name.trim(), ex: [] }; S.plans.push(p); }
+  } else if (pid) p = planById(pid);
+  if (p) {
+    if (!p.ex.includes(ex)) p.ex.push(ex);
+    p.clips = p.clips || {};
+    p.clips[ex] = { v: v.id, t };
+  }
+  save();
+  return { ex, t, p };
+}
+function stampForm(s, t) {
+  const lv = s ? s.level || '' : vLevel;
+  $('#stampForm').innerHTML = `<div class="inset">${stampFields(s, t, lv, vById(curVid))}
     <div class="row"><button class="btn grow" data-act="saveStamp" data-id="${s?.id || ''}">Save stamp</button>
     ${s ? `<button class="btn danger" data-act="delStamp" data-id="${s.id}">Delete</button>` : ''}<button class="btn ghost" data-act="cancelStamp">Cancel</button></div></div>`;
   if (!s) $('#sEx').focus();
@@ -799,7 +928,7 @@ function openSettings() {
 const ACT = {
   close: closeSheet,
   settings: openSettings,
-  startPlan: b => { const p = planById(b.dataset.id); if (p) startWorkout({ name: p.name, planId: p.id, exIds: p.ex, vid: p.vid, level: p.level }); },
+  startPlan: b => { const p = planById(b.dataset.id); if (p) startWorkout({ name: p.name, planId: p.id, exIds: p.ex, vid: p.vid, level: p.level, clips: p.clips }); },
   startEmpty: () => startWorkout({ name: 'Workout' }),
   editWeek,
   newPlan: () => { planDraft = null; editPlan(null); },
@@ -827,7 +956,7 @@ const ACT = {
   openSession: b => openSession(b.dataset.id),
   repeat: b => {
     const s = S.sessions.find(x => x.id === b.dataset.id);
-    if (s) startWorkout({ name: s.name, planId: s.planId, exIds: s.items.map(it => it.ex), vid: s.items.find(it => it.stamp)?.stamp.v, level: s.level });
+    if (s) startWorkout({ name: s.name, planId: s.planId, exIds: s.items.map(it => it.ex), level: s.level, clips: Object.fromEntries(s.items.filter(it => it.stamp).map(it => [it.ex, it.stamp])) });
   },
   delSession: b => { if (!confirm('Delete this workout from history?')) return; S.sessions = S.sessions.filter(s => s.id !== b.dataset.id); save(); closeSheet(); render(); },
   saveBody, editBody: b => { bodyDate = b.dataset.d; render(); scrollTo(0, 0); },
@@ -841,14 +970,20 @@ const ACT = {
   editStamp: b => { const s = vById(curVid).stamps.find(x => x.id === b.dataset.id); if (s) { stampForm(s, s.t); seek(s.t); } },
   cancelStamp: () => { $('#stampForm').innerHTML = ''; },
   saveStamp: b => {
-    const v = vById(curVid), t = parseClock($('#sT').value), ex = resolveEx($('#sEx').value);
-    if (t == null) { toast('Time should look like 4:35'); return; }
-    if (!ex) { toast('Type the exercise name'); return; }
-    exById(ex).group = $('#sGroup').value;
-    const note = $('#sNote').value.trim(), level = $('#sLevel').value, old = v.stamps.find(x => x.id === b.dataset.id);
-    if (old) Object.assign(old, { t, ex, note, level }); else v.stamps.push({ id: uid(), t, ex, note, level });
-    save(); $('#stampForm').innerHTML = ''; renderStamps(); toast(`Stamped ${exName(ex)} at ${clock(t)}`);
+    const r = stampFromForm(vById(curVid), b.dataset.id);
+    if (!r) return;
+    $('#stampForm').innerHTML = ''; renderStamps(); render(); buzz([20, 30, 20]);
+    toast(`Stamped ${exName(r.ex)} at ${clock(r.t)}${r.p ? ` → ${r.p.name}` : ''}`);
     try { player?.playVideo?.(); } catch (e) { /* not ready */ }
+  },
+  pasteLink: async () => {
+    try {
+      const txt = await navigator.clipboard.readText();
+      const link = (txt.match(/https?:\/\/\S+/) || [txt.trim()])[0];
+      $('#vUrl').value = link;
+      lookupVideo();
+      if (!parseYT(link)) toast('The copied text is not a YouTube link');
+    } catch (e) { $('#vUrl').focus(); toast('Long-press the box and tap Paste'); }
   },
   delStamp: b => { const v = vById(curVid); v.stamps = v.stamps.filter(x => x.id !== b.dataset.id); save(); $('#stampForm').innerHTML = ''; renderStamps(); },
   readChap: () => {
@@ -894,7 +1029,7 @@ const ACT = {
   delVideo: () => {
     if (!confirm('Delete this video and its stamps?')) return;
     S.videos = S.videos.filter(v => v.id !== curVid);
-    S.plans.forEach(p => { if (p.vid === curVid) delete p.vid; });
+    S.plans.forEach(p => { if (p.vid === curVid) delete p.vid; if (p.clips) Object.keys(p.clips).forEach(k => { if (p.clips[k].v === curVid) delete p.clips[k]; }); });
     save(); closeSheet(); render();
   },
   pMove: b => { planDraft.name = $('#pName').value; const k = +b.dataset.k, j = k + +b.dataset.d, a = planDraft.ex; if (j < 0 || j >= a.length) return; [a[k], a[j]] = [a[j], a[k]]; editPlan(planDraft.id === 'new' ? null : planDraft.id); },
@@ -969,7 +1104,7 @@ document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
   if (b && ACT[b.dataset.act]) { e.preventDefault(); ACT[b.dataset.act](b, e); return; }
   const t = e.target.closest('.tabs [data-view]');
-  if (t) { bodyDate = null; go(t.dataset.view); }
+  if (t) { bodyDate = null; buzz(8); go(t.dataset.view); }
   const r = e.target.closest('[data-rest]');
   if (r) { const v = r.dataset.rest; if (v === 'stop') stopRest(); else { restEnd += +v * 1000; tickRest(); } }
 });
@@ -984,6 +1119,7 @@ document.addEventListener('input', e => {
     save();
   } else if (k === 'vq') { vQuery = el.value; $('#vlist').innerHTML = videoList(); }
   else if (k === 'exq') { $('#exPick').innerHTML = exPickList(el.value); }
+  else if (k === 'ytq') { $('#ytGo').href = ytSearch(el.value); }
 });
 document.addEventListener('change', e => {
   const el = e.target, k = el.dataset.in;
@@ -1001,8 +1137,8 @@ document.addEventListener('paste', e => { if (e.target.id === 'vUrl') setTimeout
 $('#setBtn').addEventListener('click', openSettings);
 
 /* ---------- rest timer, elapsed clock, screen wake ---------- */
-let restEnd = 0, restBuzzed = false;
-function startRest(sec = S.settings.rest) { if (!sec) return; restEnd = Date.now() + sec * 1000; restBuzzed = false; tickRest(); }
+let restEnd = 0, restBuzzed = false, restTotal = 90;
+function startRest(sec = S.settings.rest) { if (!sec) return; restTotal = sec; restEnd = Date.now() + sec * 1000; restBuzzed = false; tickRest(); }
 function stopRest() { restEnd = 0; $('#rest').hidden = true; }
 function tickRest() {
   if (!restEnd) return;
@@ -1012,6 +1148,7 @@ function tickRest() {
   el.hidden = false;
   el.classList.toggle('over', left <= 0);
   $('#restTime').textContent = left > 0 ? clock(left) : 'Go!';
+  $('#restRing').style.strokeDasharray = `${Math.max(0, Math.min(100, left / restTotal * 100))} 100`;
   if (left <= 0 && !restBuzzed) { restBuzzed = true; navigator.vibrate?.([200, 100, 200]); beep(); }
 }
 function beep() {
