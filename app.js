@@ -18,11 +18,39 @@ const STARTER_EX = [
   ['Calf raise', 'Calves'], ['Hip thrust', 'Glutes'], ['Walking lunge', 'Glutes'],
   ['Plank', 'Core'], ['Hanging leg raise', 'Core'], ['Cable crunch', 'Core'],
 ];
-const STARTER_PLANS = [
-  ['Push', ['Bench press', 'Overhead press', 'Incline dumbbell press', 'Lateral raise', 'Triceps pushdown']],
-  ['Pull', ['Deadlift', 'Lat pulldown', 'Barbell row', 'Face pull', 'Biceps curl']],
-  ['Legs', ['Squat', 'Romanian deadlift', 'Leg press', 'Leg curl', 'Calf raise']],
-];
+// The weekly plan Sagar follows: Jeet Selal's 5-day bro split, 4–5 exercises a day, 3 sets of 6–8 and 10–12 reps.
+// [getDay(), workout name, [exercise, body part]…]; Thursday and Sunday are rest days.
+const BRO_SPLIT = {
+  source: 'Jeet Selal · 5-day bro split', target: '3 sets · 6–8 and 10–12 reps',
+  days: [
+    [1, 'Chest day', [['Bench press', 'Chest'], ['Incline dumbbell press', 'Chest'], ['Cable crossover', 'Chest'], ['Pec deck fly', 'Chest'], ['Dips', 'Chest']]],
+    [2, 'Leg day', [['Squat', 'Quads'], ['Leg press', 'Quads'], ['Romanian deadlift', 'Hamstrings'], ['Leg curl', 'Hamstrings'], ['Calf raise', 'Calves']]],
+    [3, 'Back day', [['Deadlift', 'Back'], ['Pull-up', 'Back'], ['Lat pulldown', 'Back'], ['Barbell row', 'Back'], ['Seated cable row', 'Back']]],
+    [5, 'Shoulder day', [['Overhead press', 'Shoulders'], ['Lateral raise', 'Shoulders'], ['Front raise', 'Shoulders'], ['Rear delt fly', 'Shoulders'], ['Shrug', 'Shoulders']]],
+    [6, 'Arm day', [['Biceps curl', 'Biceps'], ['Hammer curl', 'Biceps'], ['Triceps pushdown', 'Triceps'], ['Skull crusher', 'Triceps'], ['Overhead triceps extension', 'Triceps']]],
+  ],
+};
+// Puts the bro split into a saved state: adds its workouts (reusing exercises you already have, so your history
+// and "last time" weights carry over), sets Mon–Sun to it, and drops the old unused Push/Pull/Legs starters.
+function applyBroSplit(st) {
+  const key = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const exId = (name, group) => {
+    let e = st.ex.find(x => key(x.name) === key(name));
+    if (!e) { e = { id: uid(), name, group }; st.ex.push(e); }
+    return e.id;
+  };
+  const used = new Set(st.sessions.map(s => s.planId));
+  st.plans = st.plans.filter(p => !(['Push', 'Pull', 'Legs'].includes(p.name) && !used.has(p.id) && !p.vid && !Object.keys(p.clips || {}).length));
+  st.week = [null, null, null, null, null, null, null];
+  BRO_SPLIT.days.forEach(([dow, name, list]) => {
+    let p = st.plans.find(x => x.name === name);
+    if (!p) { p = { id: uid(), name, ex: list.map(([n, g]) => exId(n, g)) }; st.plans.push(p); }
+    Object.assign(p, { target: BRO_SPLIT.target, source: BRO_SPLIT.source });
+    st.week[dow] = p.id;
+  });
+  st.split = 'bro1';
+  return st;
+}
 const MEAS = [['waist', 'Waist'], ['chest', 'Chest'], ['arm', 'Arm'], ['hip', 'Hips'], ['thigh', 'Thigh']];
 const SKIP_CHAPTER = /\b(intro|introduction|outro|subscribe|sponsor|conclusion|ending|final thoughts|recap|summary|thanks)\b/i;
 
@@ -55,15 +83,12 @@ let installEvt = null, pendingReload = false;
 /* ---------- storage ---------- */
 function defaults() {
   const ex = STARTER_EX.map(([name, group]) => ({ id: uid(), name, group }));
-  const idOf = n => ex.find(e => e.name === n).id;
-  const plans = STARTER_PLANS.map(([name, list]) => ({ id: uid(), name, ex: list.map(idOf) }));
-  const [push, pull, legs] = plans.map(p => p.id);
-  return {
-    ex, plans, sessions: [], active: null, body: [], videos: [],
+  return applyBroSplit({
+    ex, plans: [], sessions: [], active: null, body: [], videos: [],
     // week[getDay()] = plan id, or null for a rest day
-    week: [null, push, pull, legs, push, pull, legs],
+    week: [null, null, null, null, null, null, null],
     settings: { goal: null, rest: 90, wake: true, theme: 'auto', level: 'beg', play: 'inapp', playV: 2 },
-  };
+  });
 }
 function load() {
   try {
@@ -72,6 +97,8 @@ function load() {
       const d = defaults(), st = { ...d, ...s, settings: { ...d.settings, ...s.settings } };
       // Play mode v2: videos play inside the app with your YouTube sign-in (earlier versions defaulted to the YouTube app).
       if (s.settings?.playV !== 2) Object.assign(st.settings, { play: 'inapp', playV: 2 });
+      // One-time switch of the weekly plan to the bro split he asked for (2026-11-01).
+      if (s.split !== 'bro1') { applyBroSplit(st); try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* saved on next change */ } }
       return st;
     }
   } catch (e) { /* nothing saved yet */ }
@@ -377,6 +404,7 @@ function viewTrain() {
     const v = plan.vid && vById(plan.vid);
     hero = `<section class="card hero">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">${esc(plan.name)}</h2>
       <div class="chiprow">${targets(plan.ex).map(bpChip).join('')}</div>
+      ${plan.target ? `<p class="small"><b>🎯 ${esc(plan.target)}</b>${plan.source ? ` · ${esc(plan.source)}` : ''}</p>` : ''}
       ${v ? `<p class="small">▶ ${esc(v.trainer || v.title)}${plan.level ? ` · ${LEVELS[plan.level]}` : ''}</p>` : ''}
       <ol class="exlist">${plan.ex.map(id => `<li>${esc(exName(id))}${hasClip(id, plan) ? ' <span class="clip">▶</span>' : ''}</li>`).join('')}</ol>
       <button class="btn block big-btn" data-act="startPlan" data-id="${plan.id}">Start ${esc(plan.name)} ›</button></section>`;
@@ -464,6 +492,7 @@ function exCard(it, i) {
   const g = exById(it.ex)?.group;
   return `<section class="card ex" id="ex-${i}" style="--c:${BP_COLORS[g] || 'var(--navy)'}"><div class="head"><div><h3>${esc(exName(it.ex))}</h3>${g ? bpChip(g) : ''}</div>
       ${clips.length ? `<button class="btn ghost small" data-act="form" data-i="${i}">▶ Form${it.stamp ? ` ${clock(it.stamp.t)}` : ''}</button>` : ''}</div>
+    ${S.active.target ? `<p class="goalline">🎯 ${esc(S.active.target)}</p>` : ''}
     <p class="last">${lt ? `<b>Last time (${fmtDate(lt.date, { day: 'numeric', month: 'short' })}):</b> ` + last.map(s => `${fmtKg(s.w || 0)} kg × ${s.r}`).join(', ') : 'First time: pick a weight you can do with good form'}</p>
     <div class="sets"><div class="set hdr"><span class="n">Set</span><span>kg</span><span>Reps</span><span></span></div>
     ${it.sets.map((s, j) => {
@@ -651,11 +680,11 @@ function barChart(vals, labels, fmt) {
 }
 
 /* ---------- workout actions ---------- */
-function startWorkout({ name, planId = null, exIds = [], vid = null, level = '', clips = null }) {
+function startWorkout({ name, planId = null, exIds = [], vid = null, level = '', clips = null, target = '' }) {
   if (S.active && !confirm('A workout is already running. Replace it?')) return;
   const v = vid && vById(vid);
   S.active = {
-    id: uid(), start: Date.now(), name, planId, ...(level ? { level } : {}),
+    id: uid(), start: Date.now(), name, planId, ...(level ? { level } : {}), ...(target ? { target } : {}),
     items: exIds.map(ex => {
       // A clip linked to this exercise in the workout wins; otherwise the workout's video at your level.
       const own = clips?.[ex] && vById(clips[ex].v) ? clips[ex] : null;
@@ -990,7 +1019,7 @@ function openSettings() {
 const ACT = {
   close: closeSheet,
   settings: openSettings,
-  startPlan: b => { const p = planById(b.dataset.id); if (p) startWorkout({ name: p.name, planId: p.id, exIds: p.ex, vid: p.vid, level: p.level, clips: p.clips }); },
+  startPlan: b => { const p = planById(b.dataset.id); if (p) startWorkout({ name: p.name, planId: p.id, exIds: p.ex, vid: p.vid, level: p.level, clips: p.clips, target: p.target }); },
   startEmpty: () => startWorkout({ name: 'Workout' }),
   editWeek,
   newPlan: () => { planDraft = null; editPlan(null); },
@@ -1036,7 +1065,7 @@ const ACT = {
   openSession: b => openSession(b.dataset.id),
   repeat: b => {
     const s = S.sessions.find(x => x.id === b.dataset.id);
-    if (s) startWorkout({ name: s.name, planId: s.planId, exIds: s.items.map(it => it.ex), level: s.level, clips: Object.fromEntries(s.items.filter(it => it.stamp).map(it => [it.ex, it.stamp])) });
+    if (s) startWorkout({ name: s.name, planId: s.planId, exIds: s.items.map(it => it.ex), level: s.level, clips: Object.fromEntries(s.items.filter(it => it.stamp).map(it => [it.ex, it.stamp])), target: s.target || planById(s.planId)?.target });
   },
   delSession: b => { if (!confirm('Delete this workout from history?')) return; S.sessions = S.sessions.filter(s => s.id !== b.dataset.id); save(); closeSheet(); render(); },
   saveBody, editBody: b => { bodyDate = b.dataset.d; render(); scrollTo(0, 0); },
