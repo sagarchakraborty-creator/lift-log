@@ -449,6 +449,12 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .pnote .row { gap: 8px; }
 .pnote .btn { flex: 1; }
 .goalline { margin: 6px 0 0; display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: var(--amber-soft); color: var(--amber); }
+.vidwrap { position: relative; }
+.skip { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; height: 44px; min-width: 52px; padding: 0 10px; border: 0; border-radius: 999px;
+  background: rgba(15, 23, 42, .55); color: #fff; font-weight: 800; font-size: 13px; backdrop-filter: blur(4px); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+.skip.l { left: 8px; }
+.skip.r { right: 8px; }
+.skip:active { transform: translateY(-50%) scale(.9); background: rgba(91, 70, 240, .85); }
 input.bad { border-color: var(--bad) !important; box-shadow: 0 0 0 3px var(--bad-soft); }
 #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 50; width: 100%; height: 100%; }
 @media (prefers-reduced-motion: reduce) {

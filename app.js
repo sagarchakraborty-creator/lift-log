@@ -337,6 +337,10 @@ async function mountPlayer(el, yt, t = 0) {
     playerVars: { start: Math.floor(t), autoplay: 1, playsinline: 1, rel: 0, modestbranding: 1 },
   });
 }
+// The in-app player with −5 s / +5 s buttons on its edges (outside #vp, which the YouTube player replaces).
+const playerBox = () => `<div class="vidwrap"><div class="vid" id="vp"></div>
+  <button class="skip l" data-act="nudge" data-d="-5" aria-label="Back 5 seconds">↺ 5s</button>
+  <button class="skip r" data-act="nudge" data-d="5" aria-label="Forward 5 seconds">5s ↻</button></div>`;
 function killPlayer() {
   clearInterval(nowTimer);
   try { player?.destroy?.(); } catch (e) { /* already gone */ }
@@ -409,7 +413,7 @@ function viewTrain() {
     hero = `<section class="card hero restday">${top(`Today · ${DOW_LONG[new Date().getDay()]}`)}<h2 class="big">Rest day</h2>
       <p>Recover, walk, stretch. Want to train anyway? Pick a workout below.</p></section>`;
   }
-  return installCard() + hero + weekStrip() + coverage() + `
+  return installCard() + hero + coverage() + `
     <section><div class="head"><h2>All workouts</h2><button class="link" data-act="newPlan">+ New</button></div>
     <div class="plans">${S.plans.map(planCard).join('')}</div>
     <button class="btn ghost block" style="margin-top:10px" data-act="startEmpty">Start an empty workout</button></section>`;
@@ -423,16 +427,6 @@ function weekRing() {
     <circle class="rp" cx="18" cy="18" r="15.9" pathLength="100" stroke-dasharray="0 100" data-pct="${pct}"/></svg><b>${done}/${planned}</b><small>This week</small></div>`;
 }
 const hasClip = (exId, plan) => !!plan.clips?.[exId] || (plan.vid && vById(plan.vid)?.stamps.some(s => s.ex === exId)) || S.videos.some(v => v.stamps.some(s => s.ex === exId));
-function weekStrip() {
-  const ws = weekStart(), todayIso = isoDay(Date.now());
-  const firstIso = S.sessions.length ? isoDay(S.sessions[0].start) : todayIso;
-  const cells = WEEK_ORDER.map((dow, i) => {
-    const iso = isoDay(ws + i * DAY), p = planById(S.week[dow]), done = sessionsOn(iso).length > 0;
-    const st = done ? 'done' : iso === todayIso ? 'today' : iso < todayIso && iso >= firstIso && p ? 'missed' : '';
-    return `<div class="wd ${st}"><span>${DOW[dow]}</span><b>${done ? '✓' : st === 'missed' ? '✕' : ''}</b><small>${p ? esc(p.name) : 'Rest'}</small></div>`;
-  }).join('');
-  return `<section class="card"><div class="head"><h2>This week</h2><button class="link" data-act="editWeek">Edit week</button></div><div class="week">${cells}</div></section>`;
-}
 // Sets done per body part this week, the days your plan trains each one, and the ones it never trains.
 function coverage() {
   const ws = weekStart(), done = {}, planned = {};
@@ -447,7 +441,7 @@ function coverage() {
       <div class="track"><i class="fill" data-w="${Math.min(100, n * 10)}"></i></div><span class="v"><b>${n}</b> / 10 sets</span>
       <span class="days">${planned[g] ? 'Planned ' + [...new Set(planned[g])].join(', ') : 'Not in your plan'}</span></div>`;
   }).join('');
-  return `<section class="card"><div class="head"><h2>Body parts this week</h2></div>
+  return `<section class="card"><div class="head"><h2>Body parts this week</h2><button class="link" data-act="editWeek">Edit week</button></div>
     <div class="bps">${rows}</div>
     ${missing.length ? `<p class="miss">Not in your week: <b>${missing.join(', ')}</b>. Add an exercise for ${missing.length === 1 ? 'it' : 'them'} to one of your workouts.</p>` : '<p class="muted small">Your week trains every major body part.</p>'}</section>`;
 }
@@ -790,7 +784,7 @@ function openClip(it) {
       `<button class="li" data-act="ytOpen" data-yt="${c.v.yt}" data-t="${c.t}"><span><b>${esc(c.v.trainer || c.v.title)}</b> ${levelTag(c.level)}${c.note ? `<br><span class="muted small">${esc(c.note)}</span>` : ''}</span><span class="r"><span class="tchip">▶ ${clock(c.t)}</span></span></button>`).join('')}</div>`);
     return;
   }
-  openSheet(`${sheetHead(esc(exName(it.ex)))}<div class="vid" id="vp"></div><div id="clipInfo"></div>
+  openSheet(`${sheetHead(esc(exName(it.ex)))}${playerBox()}<div id="clipInfo"></div>
     ${curClips.length > 1 ? `<div><h3 class="sh">Other trainers</h3><div class="list">${curClips.map((c, k) =>
       `<button class="li" data-act="clip" data-k="${k}"><span>${esc(c.v.trainer || c.v.title)} ${levelTag(c.level)}</span><span class="r muted">${clock(c.t)}</span></button>`).join('')}</div></div>` : ''}`,
   () => showClip(0));
@@ -889,7 +883,7 @@ function openVideo(id, t0 = null) {
         <span class="playbig">▶</span><span class="ytlabel">Play in YouTube app · no ads</span></button>
       <p class="muted small">Stamp an exercise: in YouTube pause at it → Share → tick <b>Start at</b> → Copy link, then tap Paste link.</p>
       <div class="row"><button class="btn grow" data-act="pasteStamp">📋 Paste link</button><button class="btn ghost" data-act="stampNow">⏱ Type time</button></div>`
-    : `<div class="vid" id="vp"></div>
+    : `${playerBox()}
       <button class="btn block" data-act="stampNow">⏱ Stamp exercise at <span id="nowT" class="num">0:00</span></button>
       ${premiumNote(v.yt, t0 || 0)}`}
     <div id="stampForm"></div>
@@ -1068,6 +1062,12 @@ const ACT = {
   formH: b => { const s = S.sessions.find(x => x.id === b.dataset.id); if (s) openClip(s.items[+b.dataset.i]); },
   clip: b => showClip(+b.dataset.k),
   seek: b => seek(+b.dataset.t),
+  // ±5 s on the player; an open stamp form follows, so you can nudge to the exact start of the exercise.
+  nudge: b => {
+    const t = Math.max(0, playerTime() + +b.dataset.d);
+    seek(t); buzz(8);
+    const f = $("#sT"); if (f && $("#stampForm")?.innerHTML.trim()) f.value = clock(t);
+  },
   pickEx: b => pickCb && pickCb(b.dataset.id),
   pickNew: () => { const q = $('[data-in="exq"]').value; const id = resolveEx(q); save(); pickCb && pickCb(id); },
   openSession: b => openSession(b.dataset.id),
