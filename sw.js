@@ -1,5 +1,5 @@
 // Lift Log service worker: offline app shell. Bump VERSION on every release, or phones keep the old copy.
-const VERSION = '2026-11-01.9';
+const VERSION = '2026-11-01.10';
 const SHELL = `liftlog-shell-${VERSION}`;
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'manifest.json', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-512-maskable.png'];
 

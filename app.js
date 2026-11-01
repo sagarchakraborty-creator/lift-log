@@ -180,7 +180,7 @@ const findEx = name => { const n = norm(name); return n ? S.ex.find(e => norm(e.
 const GUESS = [
   [/calf|calves/, 'Calves'], [/hamstring|leg curl|romanian|rdl|good morning|nordic/, 'Hamstrings'],
   [/glute|hip thrust|bridge|kickback|abduct/, 'Glutes'], [/squat|lunge|leg press|leg extension|step.?up|split/, 'Quads'],
-  [/tricep|pushdown|skull|dip|close.?grip|overhead extension|kickback/, 'Triceps'], [/curl/, 'Biceps'],
+  [/tricep|pushdown|skull|dip|close.?grip|overhead extension|kickback/, 'Triceps'], [/curl|bicep/, 'Biceps'],
   [/wrist|forearm|grip|farmer/, 'Forearms'],
   [/lateral|shoulder|overhead press|military|arnold|delt|face pull|upright row|shrug/, 'Shoulders'],
   [/row|pulldown|pull.?up|chin.?up|lat\b|deadlift|back ext|pullover/, 'Back'],
@@ -262,7 +262,7 @@ function parseClock(s) {
 // Time boxes: decimal keypad (has a dot), and the typed time is shown back as m:ss when you leave the box.
 const timeAttrs = 'inputmode="decimal" autocomplete="off" placeholder="e.g. 1.10"';
 document.addEventListener('focusout', e => {
-  if (!e.target.matches('#sT, .cT')) return;
+  if (!e.target.matches('#sT, .cT, .rT')) return;
   const t = parseClock(e.target.value);
   if (t != null) e.target.value = clock(t);
   e.target.classList.toggle('bad', !!e.target.value.trim() && t == null);
@@ -323,8 +323,9 @@ function parseChapters(text) {
   for (const raw of String(text).split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
-    if (!/\d:\d\d/.test(line)) { const l = levelIn(line); if (l) level = l; continue; }
-    const m = line.match(/[[(]?\b(\d{1,2}(?::\d{2}){1,2})\b[\])]?/);
+    // Times may be written 1:10 or 1.10 (phone keypads have no colon).
+    if (!/\d[:.]\d\d/.test(line)) { const l = levelIn(line); if (l) level = l; continue; }
+    const m = line.match(/[[(]?\b(\d{1,2}(?:[:.]\d{2}){1,2})\b[\])]?/);
     if (!m) continue;
     const t = parseClock(m[1]);
     let name = (line.slice(0, m.index) + ' ' + line.slice(m.index + m[0].length)).replace(/\s+/g, ' ')
@@ -990,10 +991,16 @@ function openVideo(id, t0 = null) {
     <div id="stampForm"></div>
     <div><div class="head"><h3 class="sh">Exercises in this video</h3></div>
       <div class="chips" id="lvChips">${levelChips()}</div><div id="stampList" class="list"></div></div>
-    <details><summary>Paste timestamps from the description</summary>
-      <p class="muted small">Many trainers list chapters like “2:15 Incline press”. Copy them from the YouTube description and paste here.</p>
-      <textarea id="chap" rows="6" placeholder="0:45 Bench press&#10;4:10 Incline dumbbell press&#10;8:30 Cable fly"></textarea>
-      <button class="btn ghost block" data-act="readChap">Read timestamps</button><div id="chapPrev"></div></details>
+    <section class="rowsbox"><h3 class="sh">Add exercises</h3>
+      <p class="muted small">One row per exercise: when it starts in the video (e.g. 1.10), the level, and the exercise.</p>
+      <div class="trow thead"><span>Start</span><span>Level</span><span>Exercise</span><span></span></div>
+      <div id="rows">${[0, 1, 2].map(() => rowHtml()).join('')}</div>
+      <button class="btn ghost block" data-act="addRow">+ Add row</button>
+      <label class="f">Add these to workout<select id="rowsPlan">${planOptions()}</select></label>
+      <button class="btn block" data-act="saveRows">Save exercises</button>
+      <details><summary>Or paste the list from the video description</summary>
+        <textarea id="chap" rows="5" placeholder="1.10 Bench press&#10;Intermediate&#10;4.10 Incline dumbbell press"></textarea>
+        <button class="btn ghost block" data-act="readChap">Put into rows</button></details></section>
     <div class="row"><button class="btn amber grow" data-act="vidWorkout">Start <span class="lvName">${vLevel ? LEVELS[vLevel] : ''}</span> workout</button><button class="btn ghost grow" data-act="vidPlan">Save as plan</button></div>
     <details><summary>Edit video details</summary>
       <label class="f">Title<input id="veTitle" value="${esc(v.title)}"></label>
@@ -1016,10 +1023,26 @@ function renderStamps() {
       <button class="tchip" ${adFree() ? `data-act="ytOpen" data-yt="${v.yt}"` : 'data-act="seek"'} data-t="${s.t}">▶ ${clock(s.t)}</button>
       <div class="grow"><b>${esc(exName(s.ex))}</b> ${vLevel ? '' : levelTag(s.level)}<br><span class="muted small">${esc(exById(s.ex)?.group || '')}${s.note ? ` · ${esc(s.note)}` : ''}</span></div>
       <button class="link" data-act="editStamp" data-id="${s.id}">Edit</button></div>`).join('')
-    : `<p class="muted small">${v.stamps.length ? 'Nothing stamped at this level yet.' : adFree() ? 'None yet. Copy a link at the exercise in YouTube and tap Paste link.' : 'None yet. Play the video and tap ⏱ Stamp when an exercise starts.'}</p>`;
+    : `<p class="muted small">${v.stamps.length ? 'Nothing stamped at this level yet.' : adFree() ? 'None yet. Copy a link at the exercise in YouTube and tap Paste link.' : 'None yet. Type them in the table below, or tap ⏱ Stamp while the video plays.'}</p>`;
 }
 const groupSelect = (id, val) => `<select id="${id}">${GROUPS.map(g => `<option ${g === val ? 'selected' : ''}>${g}</option>`).join('')}</select>`;
 // The fields for one timestamp: time, exercise, body part, level, note, and which workout it belongs to.
+// One row of the Add exercises table: start time · level · exercise · remove.
+function rowHtml(t = '', level = vLevel || S.settings.level || '', name = '') {
+  return `<div class="trow"><input class="rT" inputmode="decimal" autocomplete="off" placeholder="1.10" value="${esc(t)}" aria-label="Start time">
+    <select class="rL" aria-label="Level"><option value="">All</option>${Object.entries(LEVELS).map(([k, l]) => `<option value="${k}" ${k === level ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    <input class="rN" list="exList" value="${esc(name)}" placeholder="Exercise" autocomplete="off" aria-label="Exercise">
+    <button class="rx" data-act="delRow" aria-label="Remove row">✕</button></div>`;
+}
+// Workout choices for new exercises; defaults to the day you came from, else today's workout.
+function planOptions() {
+  const today = planById(S.week[new Date().getDay()]);
+  const sel = planHint && planById(planHint) ? planHint : today ? today.id : '';
+  return `<option value="">Don't add to a workout</option>${S.plans.map(p => {
+    const d = WEEK_ORDER.filter(x => S.week[x] === p.id).map(x => DOW[x]).join(', ');
+    return `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}${d ? ` (${d})` : ''}</option>`;
+  }).join('')}<option value="new">+ New workout…</option>`;
+}
 function stampFields(s, t, lv, v = null) {
   const inPlan = s && v ? S.plans.find(p => p.clips?.[s.ex]?.v === v.id && p.clips[s.ex].t === s.t) : null;
   const today = planById(S.week[new Date().getDay()]);
@@ -1208,30 +1231,42 @@ const ACT = {
     } catch (e) { $('#vUrl').focus(); toast('Long-press the box and tap Paste'); }
   },
   delStamp: b => { const v = vById(curVid); v.stamps = v.stamps.filter(x => x.id !== b.dataset.id); save(); $('#stampForm').innerHTML = ''; renderStamps(); },
+  // Description text → table rows (empty rows are filled first, then new ones added).
   readChap: () => {
-    const rows = parseChapters($('#chap').value);
-    if (!rows.length) { $('#chapPrev').innerHTML = '<p class="muted small">No timestamps found. Lines should start or end with a time like 2:15.</p>'; return; }
-    const lvOpts = l => `<option value="">All</option>${Object.entries(LEVELS).map(([k, x]) => `<option value="${k}" ${k === l ? 'selected' : ''}>${x}</option>`).join('')}`;
-    $('#chapPrev').innerHTML = `<p class="muted small">Check the names, body parts and levels. Untick anything that is not an exercise.</p>
-      ${rows.map(r => {
-        const hit = findEx(r.name);
-        return `<div class="chrow"><input type="checkbox" checked aria-label="Include"><input class="cT" ${timeAttrs} value="${clock(r.t)}"><input class="cN" list="exList" value="${esc(hit?.name || r.name)}">
-          <span></span><select class="cG">${GROUPS.map(g => `<option ${g === (hit?.group || guessGroup(r.name)) ? 'selected' : ''}>${g}</option>`).join('')}</select><select class="cL">${lvOpts(r.level || vLevel)}</select></div>`;
-      }).join('')}
-      <button class="btn block" data-act="addChap">Add ${rows.length} stamps</button>`;
+    const found = parseChapters($('#chap').value);
+    if (!found.length) { toast('No times found. Lines need a time like 1.10 or 1:10'); return; }
+    const box = $('#rows');
+    box.querySelectorAll('.trow').forEach(r => { if (!r.querySelector('.rT').value.trim() && !r.querySelector('.rN').value.trim()) r.remove(); });
+    box.insertAdjacentHTML('beforeend', found.map(r => rowHtml(clock(r.t), r.level || vLevel, findEx(r.name)?.name || r.name)).join(''));
+    $('#chap').value = ''; $('#chap').closest('details').open = false;
+    toast(`${found.length} rows added. Check them, then Save`);
   },
-  addChap: () => {
-    const v = vById(curVid);
-    let n = 0;
-    document.querySelectorAll('#chapPrev .chrow').forEach(r => {
-      if (!r.querySelector('[type=checkbox]').checked) return;
-      const t = parseClock(r.querySelector('.cT').value), ex = resolveEx(r.querySelector('.cN').value), level = r.querySelector('.cL').value;
-      if (t == null || !ex) return;
-      exById(ex).group = r.querySelector('.cG').value;
-      if (v.stamps.some(s => s.t === t && s.ex === ex)) return;
-      v.stamps.push({ id: uid(), t, ex, note: '', level }); n++;
+  addRow: () => { $('#rows').insertAdjacentHTML('beforeend', rowHtml()); $('#rows .trow:last-child .rT').focus(); },
+  delRow: b => { b.closest('.trow').remove(); if (!$('#rows .trow')) $('#rows').innerHTML = rowHtml(); },
+  // Saves every filled row as a stamp (time + level + exercise) and adds the exercises to the chosen workout.
+  saveRows: () => {
+    const v = vById(curVid), rows = [...document.querySelectorAll('#rows .trow')];
+    const pid = $('#rowsPlan').value;
+    let p = null, n = 0, bad = 0;
+    if (pid === 'new') {
+      const name = prompt('Name the new workout', v.trainer ? `${v.trainer} workout` : 'New workout');
+      if (name && name.trim()) { p = { id: uid(), name: name.trim(), ex: [] }; S.plans.push(p); }
+    } else if (pid) p = planById(pid);
+    rows.forEach(r => {
+      const tIn = r.querySelector('.rT'), name = r.querySelector('.rN').value.trim();
+      if (!tIn.value.trim() && !name) return;
+      const t = parseClock(tIn.value);
+      if (t == null || !name) { bad++; tIn.classList.toggle('bad', t == null); r.querySelector('.rN').classList.toggle('bad', !name); return; }
+      const ex = resolveEx(name), level = r.querySelector('.rL').value;
+      const old = v.stamps.find(s => s.t === t && s.ex === ex);
+      if (old) old.level = level; else v.stamps.push({ id: uid(), t, ex, note: '', level });
+      if (p) { if (!p.ex.includes(ex)) p.ex.push(ex); (p.clips = p.clips || {})[ex] = { v: v.id, t }; }
+      r.remove(); n++;
     });
-    save(); renderStamps(); $('#chapPrev').innerHTML = ''; $('#chap').value = ''; toast(`${n} stamps added`);
+    if (!n) { toast(bad ? 'Fill the start time and exercise in each row' : 'Type at least one row'); return; }
+    if (!$('#rows .trow')) $('#rows').innerHTML = rowHtml();
+    save(); renderStamps(); render(); buzz([20, 30, 20]); confetti(40);
+    toast(`${n} exercise${n === 1 ? '' : 's'} saved${p ? ` → ${p.name}` : ''}${bad ? ` · ${bad} row${bad === 1 ? '' : 's'} need fixing` : ''}`);
   },
   vLevel: b => { vLevel = b.dataset.l; renderStamps(); },
   vidWorkout: () => {
@@ -1433,7 +1468,7 @@ function applyTheme() {
   // Each person has their own colours, and their initial on the switch button.
   document.documentElement.dataset.person = person;
   const w = $('#whoBtn');
-  if (w) { w.textContent = me().name[0]; w.title = me().name; }
+  if (w) w.innerHTML = `<span class="wi">${me().name[0]}</span>${me().name} ▾`;
 }
 function whoSheet() {
   openSheet(`${sheetHead('Who is training?')}

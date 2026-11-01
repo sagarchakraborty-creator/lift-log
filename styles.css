@@ -462,8 +462,11 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 }
 @media (prefers-color-scheme: dark) { :root[data-person="madhumita"]:not([data-theme="light"]) { --navy: #f472b6; --navy-soft: #3d1830; } }
 :root[data-person="madhumita"][data-theme="dark"] { --navy: #f472b6; --navy-soft: #3d1830; }
-.who { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--grad); color: #fff; font: 800 18px var(--display);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, .18); }
+.who { height: 40px; border-radius: 999px; border: 0; padding: 0 12px 0 4px; display: inline-flex; align-items: center; gap: 6px;
+  background: var(--grad); color: #fff; font-weight: 700; font-size: 14px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0, 0, 0, .18); }
+.who .wi { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .25); font: 800 16px var(--display); }
+/* Narrow phones: name pill + install pill + gear must fit beside the title. */
+@media (max-width: 400px) { .install-pill { padding: 0 10px; font-size: 13px; } .top-in h1 { font-size: 26px; } }
 .people { display: grid; gap: 10px; }
 .person { display: grid; grid-template-columns: 52px 1fr auto; gap: 12px; align-items: center; width: 100%; text-align: left;
   border: 2px solid var(--line); border-radius: 16px; background: var(--surface); padding: 12px; }
@@ -475,6 +478,18 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; justif
 .person small { display: block; color: var(--muted); font-size: 12px; }
 .person .go { color: var(--navy); font-weight: 800; font-size: 20px; }
 .sets.one .set { grid-template-columns: 30px 1fr 48px; }
+/* Add exercises table: start · level · exercise · remove */
+.rowsbox { display: grid; gap: 8px; background: var(--navy-soft); border-radius: 14px; padding: 12px; }
+.rowsbox .sh { margin: 0; }
+.rowsbox p { margin: 0; }
+.trow { display: grid; grid-template-columns: 54px 96px 1fr 28px; gap: 5px; align-items: center; }
+.trow.thead { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+#rows { display: grid; gap: 6px; }
+.trow input, .trow select { height: 42px; min-width: 0; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 0 8px; font-size: 15px; color: var(--ink); }
+.trow .rT { text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.trow select { padding: 0 4px; font-size: 13px; }
+.rx { width: 28px; height: 28px; border: 0; border-radius: 50%; background: var(--surface); color: var(--muted); }
+.rowsbox textarea { background: var(--surface); }
 input.bad { border-color: var(--bad) !important; box-shadow: 0 0 0 3px var(--bad-soft); }
 #confetti { position: fixed; inset: 0; pointer-events: none; z-index: 50; width: 100%; height: 100%; }
 @media (prefers-reduced-motion: reduce) {
