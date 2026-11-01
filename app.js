@@ -62,13 +62,18 @@ function defaults() {
     ex, plans, sessions: [], active: null, body: [], videos: [],
     // week[getDay()] = plan id, or null for a rest day
     week: [null, push, pull, legs, push, pull, legs],
-    settings: { goal: null, rest: 90, wake: true, theme: 'auto', level: 'beg', play: 'app' },
+    settings: { goal: null, rest: 90, wake: true, theme: 'auto', level: 'beg', play: 'inapp', playV: 2 },
   };
 }
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && Array.isArray(s.sessions)) { const d = defaults(); return { ...d, ...s, settings: { ...d.settings, ...s.settings } }; }
+    if (s && Array.isArray(s.sessions)) {
+      const d = defaults(), st = { ...d, ...s, settings: { ...d.settings, ...s.settings } };
+      // Play mode v2: videos play inside the app with your YouTube sign-in (earlier versions defaulted to the YouTube app).
+      if (s.settings?.playV !== 2) Object.assign(st.settings, { play: 'inapp', playV: 2 });
+      return st;
+    }
   } catch (e) { /* nothing saved yet */ }
   return defaults();
 }
@@ -136,12 +141,27 @@ function parseDur(s) {
   const m = String(s).match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
   return m ? (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0) : 0;
 }
+// Times as typed on a phone keypad: "1:10", "1.10", "1,10", "1 10" or "110" all mean 1 min 10 s;
+// "45" means 45 s; "1.02.30" or "10230" means 1 h 2 min 30 s.
 function parseClock(s) {
-  s = String(s || '').trim();
-  if (/^\d+$/.test(s)) return +s;
+  s = String(s || '').trim().replace(/\s*[.,;\s-]\s*/g, ':');
+  if (/^\d+$/.test(s)) {
+    if (s.length <= 2) return +s;
+    s = s.length <= 4 ? `${s.slice(0, -2)}:${s.slice(-2)}` : `${s.slice(0, -4)}:${s.slice(-4, -2)}:${s.slice(-2)}`;
+  }
   if (!/^\d{1,2}(:\d{1,2}){1,2}$/.test(s)) return null;
-  return s.split(':').reduce((a, p) => a * 60 + +p, 0);
+  const parts = s.split(':').map(Number);
+  if (parts.slice(1).some(p => p > 59)) return null;
+  return parts.reduce((a, p) => a * 60 + p, 0);
 }
+// Time boxes: decimal keypad (has a dot), and the typed time is shown back as m:ss when you leave the box.
+const timeAttrs = 'inputmode="decimal" autocomplete="off" placeholder="e.g. 1.10"';
+document.addEventListener('focusout', e => {
+  if (!e.target.matches('#sT, .cT')) return;
+  const t = parseClock(e.target.value);
+  if (t != null) e.target.value = clock(t);
+  e.target.classList.toggle('bad', !!e.target.value.trim() && t == null);
+});
 function parseYT(s) {
   s = String(s || '').trim();
   let id = null, t = 0;
@@ -160,8 +180,16 @@ function parseYT(s) {
   return id && /^[\w-]{11}$/.test(id) ? { id, t } : null;
 }
 const watchUrl = (yt, t = 0) => `https://www.youtube.com/watch?v=${yt}${t ? `&t=${Math.floor(t)}s` : ''}`;
-// Ad-free playback: hand the video to the YouTube app, which is signed in with your Premium account.
+// Play mode: 'inapp' plays in Lift Log's own YouTube player, which uses your YouTube sign-in in this browser
+// (Premium = no ads); 'app' hands every video to the YouTube app instead.
 const adFree = () => S.settings.play !== 'inapp';
+const YT_SIGNIN = 'https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fm.youtube.com%2F';
+const isIOS = () => /iPhone|iPad|iPod/i.test(navigator.userAgent);
+// Under every in-app player: sign in once with your Premium account, or jump to the YouTube app if an ad shows.
+const premiumNote = (yt, t) => `<div class="pnote">
+  <span>${isIOS() ? 'iPhone hides your YouTube sign-in from web apps, so ads may play here.' : 'No ads when this phone’s Chrome is signed in to your <b>YouTube Premium</b> account.'}</span>
+  <div class="row">${S.settings.ytSigned || isIOS() ? '' : `<a class="btn small" href="${YT_SIGNIN}" target="_blank" rel="noopener" data-act="ytSignin">Sign in to YouTube ↗</a>`}
+  <button class="btn ghost small" data-act="ytOpen" data-yt="${yt}" data-t="${t}">Ad? Open in YouTube app</button></div></div>`;
 function ytAppUrl(yt, t = 0) {
   const ua = navigator.userAgent, s = Math.floor(t);
   if (/Android/i.test(ua)) return `intent://www.youtube.com/watch?v=${yt}&t=${s}s#Intent;scheme=https;package=com.google.android.youtube;S.browser_fallback_url=${encodeURIComponent(watchUrl(yt, s))};end`;
@@ -744,8 +772,8 @@ function showClip(k) {
   const c = curClips[k];
   $('#clipInfo').innerHTML = `<p class="small"><b>${esc(c.v.trainer || 'Video')}</b> ${levelTag(c.level)} · ${esc(c.v.title)} · at ${clock(c.t)}</p>
     ${c.note ? `<p class="note">${esc(c.note)}</p>` : ''}
-    <div class="row"><button class="btn ghost small" data-act="seek" data-t="${c.t}">↺ Back to ${clock(c.t)}</button>
-    <button class="btn ghost small" data-act="ytOpen" data-yt="${c.v.yt}" data-t="${c.t}">YouTube app ↗</button></div>`;
+    <button class="btn ghost small" data-act="seek" data-t="${c.t}">↺ Back to ${clock(c.t)}</button>
+    ${premiumNote(c.v.yt, c.t)}`;
   mountPlayer($('#vp'), c.v.yt, c.t);
 }
 
@@ -789,7 +817,7 @@ function saveVideo() {
   const p = parseYT($('#vUrl').value);
   if (!p) { toast('Paste a YouTube link first'); return; }
   const wantsStamp = $('#sEx').value.trim();
-  if (wantsStamp && parseClock($('#sT').value) == null) { toast('Time should look like 4:35'); return; }
+  if (wantsStamp && parseClock($('#sT').value) == null) { toast('Type the time like 1.10 (1 min 10 s)'); return; }
   let v = S.videos.find(x => x.yt === p.id);
   if (!v) {
     v = { id: uid(), yt: p.id, title: $('#vTitle').value.trim() || 'YouTube video', trainer: $('#vTrainer').value.trim(), added: Date.now(), stamps: [] };
@@ -825,8 +853,8 @@ function openVideo(id, t0 = null) {
       <p class="muted small">Stamp an exercise: in YouTube pause at it → Share → tick <b>Start at</b> → Copy link, then tap Paste link.</p>
       <div class="row"><button class="btn grow" data-act="pasteStamp">📋 Paste link</button><button class="btn ghost" data-act="stampNow">⏱ Type time</button></div>`
     : `<div class="vid" id="vp"></div>
-      <div class="row"><button class="btn grow" data-act="stampNow">⏱ Stamp at <span id="nowT" class="num">0:00</span></button>
-      <button class="btn ghost" data-act="ytOpen" data-yt="${v.yt}" data-t="0">YouTube app ↗</button></div>`}
+      <button class="btn block" data-act="stampNow">⏱ Stamp exercise at <span id="nowT" class="num">0:00</span></button>
+      ${premiumNote(v.yt, t0 || 0)}`}
     <div id="stampForm"></div>
     <div><div class="head"><h3 class="sh">Exercises in this video</h3></div>
       <div class="chips" id="lvChips">${levelChips()}</div><div id="stampList" class="list"></div></div>
@@ -865,7 +893,7 @@ function stampFields(s, t, lv, v = null) {
   const today = planById(S.week[new Date().getDay()]);
   const sel = inPlan ? inPlan.id : (!s && today ? today.id : '');
   return `<div class="grid2">
-      <label class="f">Time in video<input id="sT" inputmode="numeric" value="${clock(t)}"></label>
+      <label class="f">Time in video<input id="sT" ${timeAttrs} value="${clock(t)}"></label>
       <label class="f">Exercise<input id="sEx" list="exList" value="${s ? esc(exName(s.ex)) : ''}" placeholder="e.g. Bench press" autocomplete="off"></label>
       <label class="f">Body part${groupSelect('sGroup', s ? exById(s.ex)?.group : 'Chest')}</label>
       <label class="f">Level<select id="sLevel"><option value="">All levels</option>${Object.entries(LEVELS).map(([k, l]) => `<option value="${k}" ${k === lv ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
@@ -877,7 +905,7 @@ function stampFields(s, t, lv, v = null) {
 // Saves the stamp from the form; if a workout is picked, the exercise joins it, linked to this second of the video.
 function stampFromForm(v, sid) {
   const t = parseClock($('#sT').value), ex = resolveEx($('#sEx').value);
-  if (t == null) { toast('Time should look like 4:35'); return null; }
+  if (t == null) { toast('Type the time like 1.10 (1 min 10 s)'); return null; }
   if (!ex) { toast('Type the exercise name'); return null; }
   exById(ex).group = $('#sGroup').value;
   const note = $('#sNote').value.trim(), level = $('#sLevel').value, old = v.stamps.find(x => x.id === sid);
@@ -940,12 +968,12 @@ function openSettings() {
     <div class="grid2"><label class="f">Rest timer<select data-in="rest">${[0, 45, 60, 90, 120, 150, 180, 240].map(v => `<option value="${v}" ${v === s.rest ? 'selected' : ''}>${v ? clock(v) + ' min' : 'Off'}</option>`).join('')}</select></label>
       <label class="f">Goal weight (kg)<input inputmode="decimal" data-in="goal" value="${s.goal ?? ''}" placeholder="e.g. 70"></label></div>
     <div><h3 class="sh">Videos</h3><div class="chips">
-      <button class="chip ${s.play !== 'inapp' ? 'on' : ''}" data-act="playMode" data-m="app">YouTube app · no ads</button>
-      <button class="chip ${s.play === 'inapp' ? 'on' : ''}" data-act="playMode" data-m="inapp">Inside Lift Log</button></div>
-      <p class="muted small">${s.play !== 'inapp'
-        ? 'Clips open in the YouTube app at the exact second, signed in with your Premium account, so there are no ads.'
-        : 'Videos play inside Lift Log. They are ad-free only while you are signed in to YouTube Premium in this browser; on iPhone they will usually show ads.'}</p>
-      <a class="btn ghost block" href="https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F" target="_blank" rel="noopener">Sign in to YouTube ↗</a></div>
+      <button class="chip ${s.play === 'inapp' ? 'on' : ''}" data-act="playMode" data-m="inapp">Play inside Lift Log</button>
+      <button class="chip ${s.play !== 'inapp' ? 'on' : ''}" data-act="playMode" data-m="app">Open YouTube app</button></div>
+      <p class="muted small">${s.play === 'inapp'
+        ? 'Videos play in Lift Log’s YouTube player using your YouTube login. Sign in once in Chrome with your Premium account and there are no ads. (iPhone hides the login from web apps, so ads may play there.)'
+        : 'Every video opens in the YouTube app at the exact second, signed in with your Premium account.'}</p>
+      <a class="btn ghost block" href="${YT_SIGNIN}" target="_blank" rel="noopener" data-act="ytSignin">Sign in to YouTube (Premium account) ↗</a></div>
     <label class="f">My level (which trainer clips to show first)<select data-in="level">${Object.entries(LEVELS).map(([k, l]) => `<option value="${k}" ${k === s.level ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <details><summary>Exercises and body parts (${S.ex.length})</summary><div class="list">${[...S.ex].sort((a, b) => a.name.localeCompare(b.name)).map(e =>
       `<label class="li"><span>${esc(e.name)}</span><select class="ex-pick narrow" data-in="exGroup" data-id="${e.id}">${GROUPS.map(g => `<option ${g === e.group ? 'selected' : ''}>${g}</option>`).join('')}</select></label>`).join('')}</div></details>
@@ -982,6 +1010,12 @@ const ACT = {
   delSet: b => { S.active.items[+b.dataset.i].sets.pop(); save(); closeSheet(); render(); },
   delEx: b => { S.active.items.splice(+b.dataset.i, 1); save(); closeSheet(); render(); },
   ytOpen: b => openYT(b.dataset.yt, +b.dataset.t || 0),
+  // You sign in on Google's own page (Lift Log never sees your password); Chrome then shares that login with the player.
+  ytSignin: () => {
+    window.open(YT_SIGNIN, '_blank', 'noopener');
+    S.settings.ytSigned = true; save();
+    toast('After signing in, come back and replay the video');
+  },
   // Ad-free stamping: a link copied in YouTube with "Start at" carries the second of the exercise.
   pasteStamp: async () => {
     const v = vById(curVid);
@@ -1039,7 +1073,7 @@ const ACT = {
     $('#chapPrev').innerHTML = `<p class="muted small">Check the names, body parts and levels. Untick anything that is not an exercise.</p>
       ${rows.map(r => {
         const hit = findEx(r.name);
-        return `<div class="chrow"><input type="checkbox" checked aria-label="Include"><input class="cT" inputmode="numeric" value="${clock(r.t)}"><input class="cN" list="exList" value="${esc(hit?.name || r.name)}">
+        return `<div class="chrow"><input type="checkbox" checked aria-label="Include"><input class="cT" ${timeAttrs} value="${clock(r.t)}"><input class="cN" list="exList" value="${esc(hit?.name || r.name)}">
           <span></span><select class="cG">${GROUPS.map(g => `<option ${g === (hit?.group || guessGroup(r.name)) ? 'selected' : ''}>${g}</option>`).join('')}</select><select class="cL">${lvOpts(r.level || vLevel)}</select></div>`;
       }).join('')}
       <button class="btn block" data-act="addChap">Add ${rows.length} stamps</button>`;
